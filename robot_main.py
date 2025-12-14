@@ -206,7 +206,20 @@ def run_robot():
                 print(f">>> BAR DETECTED: Triggering {TRACK_SEQUENCE[track_index]['name']}")
                 motors.stop()
                 time.sleep(0.05)
+
+                # --- CLEAR BAR (Drive Blindly Past It) ---
+                motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                time.sleep(BAR_CLEAR_TIME)
+
+                # Keep creeping until we're OFF the bar
+                clear_start = time.monotonic()
+                while is_black_bar(sensors.read_calibrated()) and (time.monotonic() - clear_start < 1.0):
+                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                    time.sleep(0.05)
                 
+                motors.stop()
+                time.sleep(0.05)
+                            
                 current_event = TRACK_SEQUENCE[track_index]
                 action = current_event["action"]
                 gaps_allowed = current_event["gaps_allowed"] # Update Gap Logic
@@ -219,17 +232,7 @@ def run_robot():
                     execute_u_turn(motors, sensors)
                 elif callable(action):
                     action(motors, sensors, **args)
-                
-                # --- CLEAR BAR (Drive Blindly Past It) ---
-                if action is None:
-                    print("Blind Drive (Clearing Bar)...")
-                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
-                    time.sleep(BAR_CLEAR_TIME) 
-                    # Ensure sensors see white/line before re-engaging logic
-                    while is_black_bar(sensors.read_calibrated()):
-                        motors.set_speeds(BASE_SPEED, BASE_SPEED)
-                        time.sleep(0.05)
-                
+                                
                 track_index += 1
                 if track_index >= len(TRACK_SEQUENCE):
                     print("Sequence Complete!")

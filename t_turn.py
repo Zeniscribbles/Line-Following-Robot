@@ -38,14 +38,7 @@ def _stable_condition(cond_fn, required_hits, timeout_s):
 
 
 def execute_t_turn(motors, sensors, turn_left=True):
-    """
-    Executes a 90-degree turn using sensors to define start/stop points.
-
-    Phases:
-    1) Drive forward until the intersection is cleared (mostly white, stable)
-    2) Spin until we're no longer seeing the old bar (mostly white, stable)
-    3) Continue spinning until we reacquire the new line stably and roughly centered
-    """
+    
     direction_str = "LEFT" if turn_left else "RIGHT"
     trx.sendMSG(f"Exec T-Turn: {direction_str}")
     print(f"Exec T-Turn: {direction_str}")
