@@ -53,16 +53,16 @@ def execute_t_turn(motors, sensors, turn_left=True):
         return sum(vals) <= 1
 
     def centered_on_line():
-    vals = sensors.read_calibrated()
-    black = sum(vals)
+        vals = sensors.read_calibrated()
+        black = sum(vals)
 
-    center_ok = (vals[3] == 1 or vals[4] == 1)
-    err = sensors.get_line_error()
+        center_ok = (vals[3] == 1 or vals[4] == 1)
+        err = sensors.get_line_error()
 
-    # must look like a single line, not a fat intersection blob
-    normal_line = (1 <= black <= 4)
+        # must look like a single line, not a fat intersection blob
+        normal_line = (1 <= black <= 4)
 
-    return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
+        return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
 
     try:
         # --- PHASE 1: CLEAR THE INTERSECTION ---
