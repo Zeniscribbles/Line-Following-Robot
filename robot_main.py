@@ -3,6 +3,7 @@ import board
 from motor_driver_subsystem_2channel import MotorDriver
 from reflective_array_subsystem import ReflectiveArray
 from PID import PID
+from esp32_trx import TRX
 
 # Import the logic from other files
 import straight_away
@@ -20,6 +21,87 @@ TRACK_MAP = [
     'STRAIGHT',    # Exit of fork/serpentine to finish
     'FINISH'       # Stop
 ]
+
+# Initialize TRX globally so we can log from anywhere
+trx = TRX(printDebug=False, blinkDebug=False)
+trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
+
+def execute_u_turn(motors, sensors, turn_left=True):
+    """
+    Executes ~180-degree turn and reacquires the line going the opposite direction.
+
+    Strategy:
+    - Spin in place.
+    - Don't allow reacquire until either:
+        a) we've seen mostly-white (line gone) at least once, and
+        b) a minimum spin time has elapsed
+    - Then require stable centered reacquire.
+    """
+    direction_str = "LEFT" if turn_left else "RIGHT"
+    trx.sendMSG(f"Exec U-Turn: {direction_str}")
+    print(f"Exec U-Turn: {direction_str}")
+
+    SAMPLE_DT = 0.005
+    MIN_SPIN_TIME = 0.60          # tune 0.5–0.9 depending on your chassis
+    MAX_SPIN_TIME = 4.0
+    WHITE_THRESH = 1              # sum(vals) <= this == "mostly white"
+    ACQUIRE_SAMPLES = 8
+    CENTER_ERR_THRESH = 0.25      # loosen to 0.35 if it never locks
+
+    def mostly_white():
+        vals = sensors.read_calibrated()
+        return sum(vals) <= WHITE_THRESH
+
+    def centered_on_line():
+        vals = sensors.read_calibrated()
+        black = sum(vals)
+        center_ok = (vals[3] == 1 or vals[4] == 1)
+        err = sensors.get_line_error()
+        normal_line = (1 <= black <= 4)
+        return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
+
+    motors.stop()
+    time.sleep(0.05)
+
+    # Start spinning
+    if turn_left:
+        motors.set_speeds(-TURN_SPEED, TURN_SPEED)
+    else:
+        motors.set_speeds(TURN_SPEED, -TURN_SPEED)
+
+    spin_start = time.monotonic()
+    saw_white = False
+    stable = 0
+
+    while True:
+        elapsed = time.monotonic() - spin_start
+        if elapsed > MAX_SPIN_TIME:
+            trx.sendMSG("ERR: U-Turn Timeout")
+            break
+
+        if mostly_white():
+            saw_white = True
+
+        # gate reacquire so we don't "micro-turn"
+        if elapsed < MIN_SPIN_TIME or not saw_white:
+            time.sleep(SAMPLE_DT)
+            continue
+
+        if centered_on_line():
+            stable += 1
+            if stable >= ACQUIRE_SAMPLES:
+                trx.sendMSG("U-Turn Line Acquired")
+                break
+        else:
+            stable = 0
+
+        time.sleep(SAMPLE_DT)
+
+    motors.stop()
+    time.sleep(0.08)
+    trx.sendMSG("U-Turn Complete")
+    print("U-Turn Complete")
+
 
 def run_robot():
     # 1. Initialize Hardware
@@ -100,7 +182,7 @@ def run_robot():
                 if new_state == 'FORK':
                     # If you later update fork.handle_fork to accept sensors,
                     # change this to: fork.handle_fork(motors, sensors, direction="random")
-                    fork.handle_fork(motors, direction="random")
+                    fork.handle_fork(motors, sensors, direction="random")
 
                 elif new_state == 'TTURN_LEFT':
                     t_turn.execute_t_turn(motors, sensors, turn_left=True)
