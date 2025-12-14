@@ -1,136 +1,118 @@
 import board
 import digitalio
+import time
 
 class ReflectiveArray:
-    def __init__(self, line_high=True, pull=None, ema_alpha=None):
-        """
-        line_high:
-            True  -> sensor.value == True means "black"
-            False -> sensor.value == False means "black" (common on many modules)
-
-        pull:
-            None, digitalio.Pull.UP, or digitalio.Pull.DOWN (only if your sensor output floats)
-
-        ema_alpha:
-            None (no filtering) or float in (0,1]. Example: 0.35
-            Higher = more responsive, lower = smoother.
-        """
-        self.sensor_pins = [
-            board.D10, board.D9, board.D8, board.D7,
-            board.D6, board.D5, board.D4, board.D3
-        ]
-
-        self.sensors = []
-        for pin in self.sensor_pins:
-            s = digitalio.DigitalInOut(pin)
-            s.direction = digitalio.Direction.INPUT
-            if pull is not None:
-                s.pull = pull
-            self.sensors.append(s)
-
-        # "Calibration" tracking (with digital sensors, this will just become 0/1)
-        self.min_vals = [1] * 8
-        self.max_vals = [0] * 8
-
-        # Emitter control pins
+    def __init__(self):
+        # ----- IR emitter control -----
+        # Initialize emitter pins (adjust pins as needed per your wiring)
         self.ctrl_odd = digitalio.DigitalInOut(board.D2)
         self.ctrl_odd.direction = digitalio.Direction.OUTPUT
-        self.ctrl_odd.value = True
+        self.ctrl_odd.value = True 
 
         self.ctrl_even = digitalio.DigitalInOut(board.D11)
         self.ctrl_even.direction = digitalio.Direction.OUTPUT
         self.ctrl_even.value = True
 
-        self.line_high = line_high
+        # ----- Sensor pins -----
+        # Changes MADE HEREs
+        # Assuming D10 is far left and D3 is far right:
+        # Check documentation: 
+        self.sensor_pins = [
+            board.D10, board.D9, board.D8, board.D7, 
+            board.D6, board.D5, board.D4, board.D3
+        ]
+        
+        self.sensors = []
+        for pin in self.sensor_pins:
+            s = digitalio.DigitalInOut(pin)
+            s.direction = digitalio.Direction.INPUT
+            self.sensors.append(s)
 
-        # Lost-line handling
-        self._last_error = 0.0
+        # Calibration data (min/max readings observed)
+        self.min_vals = [200] * 8
+        self.max_vals = [2000] * 8
 
-        # Optional smoothing for jittery digital readings
-        self.ema_alpha = ema_alpha
-        self._filtered_error = 0.0
+    def read_raw(self, max_time_us=3000):
+        """Reads raw decay times in microseconds."""
+        # 1. Charge Capactitors
+        for s in self.sensors:
+            s.direction = digitalio.Direction.OUTPUT
+            s.value = True
+        
+        time.sleep(0.00002) # 20us charge time
 
-        # Optional black-bar debounce state
-        self._bar_hits = 0
+        # 2. Switch to Input and measure decay
+        for s in self.sensors:
+            s.direction = digitalio.Direction.INPUT
+            # CircuitPython pull disabling is implicit on some boards or not required if external pullups absent
 
-    def read_raw(self):
-        """Raw boolean reads from the digital pins."""
-        return [s.value for s in self.sensors]
+        start = time.monotonic_ns()
+        max_time_ns = max_time_us * 1000
+        times_ns = [None] * 8
+        
+        while True:
+            now = time.monotonic_ns()
+            elapsed = now - start
+            all_done = True
+            for i, s in enumerate(self.sensors):
+                if times_ns[i] is None:
+                    if not s.value: # pin went low
+                        times_ns[i] = elapsed
+                    else:
+                        all_done = False
+            
+            if all_done or elapsed >= max_time_ns:
+                break
+        
+        # Fill timeouts
+        results = []
+        for t in times_ns:
+            if t is None:
+                results.append(max_time_us)
+            else:
+                results.append(t // 1000)
+        return results
 
     def read_calibrated(self):
-        """
-        Returns a list of ints (0/1) where 1 means "black".
-        Also updates min/max for your main's calibration printout.
-        """
+        """Returns values normalized between 0.0 (white) and 1.0 (black)."""
         raw = self.read_raw()
-
-        if self.line_high:
-            vals = [1 if v else 0 for v in raw]
-        else:
-            vals = [0 if v else 1 for v in raw]
-
-        # Update min/max (digital-only will converge to 0/1, but at least it's consistent)
-        for i, v in enumerate(vals):
-            if v < self.min_vals[i]:
-                self.min_vals[i] = v
-            if v > self.max_vals[i]:
-                self.max_vals[i] = v
-
-        return vals
+        calibrated = []
+        for i, val in enumerate(raw):
+            # Update calibration dynamically (optional, but helps adaptation)
+            self.min_vals[i] = min(self.min_vals[i], val)
+            self.max_vals[i] = max(self.max_vals[i], val)
+            
+            denom = self.max_vals[i] - self.min_vals[i]
+            if denom == 0: denom = 1
+            
+            # Normalize
+            norm = (val - self.min_vals[i]) / denom
+            calibrated.append(max(0.0, min(1.0, norm)))
+            
+        return calibrated
 
     def get_line_error(self):
         """
-        Returns -1.0 (Left) to 1.0 (Right). 0.0 is center.
-        If line is lost (no black detected), returns the last known error.
+        Returns position error from -1.0 (left) to 1.0 (right).
+        0.0 means centered.
         """
         vals = self.read_calibrated()
-
-        # Weights: left negative, right positive
+        
+        # Weighted average method
+        # Weights: -4, -3, -2, -1, +1, +2, +3, +4
+        # We skip 0 to force a distinction between left and right
         weights = [-4, -3, -2, -1, 1, 2, 3, 4]
-
-        num = 0
-        den = 0
-        for i, v in enumerate(vals):
-            if v:
-                num += weights[i]
-                den += 1
-
-        if den == 0:
-            # Lost line: keep turning the same way as last seen
-            err = self._last_error
-        else:
-            err = (num / den) / 4.0
-            self._last_error = err
-
-        # Optional smoothing to reduce twitch with digital sensors
-        if self.ema_alpha is not None:
-            a = self.ema_alpha
-            self._filtered_error = a * err + (1.0 - a) * self._filtered_error
-            return self._filtered_error
-
-        return err
-
-    def black_count(self):
-        """How many sensors currently see black (1)."""
-        return sum(self.read_calibrated())
-
-    def is_black_bar(self, threshold=6):
-        """
-        Instantaneous check: True if >= threshold sensors see black.
-        (Your updated main already does consecutive-hit confirmation.)
-        """
-        return self.black_count() >= threshold
-
-    def reset_bar_detector(self):
-        self._bar_hits = 0
-
-    def is_black_bar_confirmed(self, threshold=6, required_hits=3):
-        """
-        Debounced black bar detector (optional).
-        Use this if you want the debounce inside the sensor class instead of main.
-        """
-        if self.is_black_bar(threshold=threshold):
-            self._bar_hits += 1
-        else:
-            self._bar_hits = 0
-        return self._bar_hits >= required_hits
+        
+        numerator = 0.0
+        denominator = 0.0
+        
+        for i in range(8):
+            numerator += vals[i] * weights[i]
+            denominator += vals[i]
+            
+        if denominator < 0.1: 
+            return 0.0 # No line seen
+            
+        # Result is roughly -4 to 4, normalize to -1 to 1
+        return (numerator / denominator) / 4.0
