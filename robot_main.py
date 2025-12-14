@@ -1,7 +1,7 @@
 import time
 import board
 import digitalio
-from motor_driver_subsystem_2channel import MotorDriver
+from motor_2_channel import MotorDriver
 from reflective_array_subsystem import ReflectiveArray
 from PID import PID
 from esp32_trx import TRX
@@ -29,25 +29,6 @@ trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
 def is_black_bar(vals):
     """vals are floats 0..1. Detect thick horizontal bar."""
     return sum(1 for v in vals if v >= BAR_THRESH) >= BAR_COUNT_THRESH
-
-
-def compute_line_error_from_vals(vals):
-    """
-    Weighted average like your ReflectiveArray.get_line_error(), but uses pre-read vals.
-    Returns -1..1.
-    """
-    weights = [-4, -3, -2, -1, 1, 2, 3, 4]
-    numerator = 0.0
-    denominator = 0.0
-
-    for i in range(8):
-        numerator += vals[i] * weights[i]
-        denominator += vals[i]
-
-    if denominator < 0.1:
-        return 0.0
-
-    return (numerator / denominator) / 4.0
 
 
 def execute_u_turn(motors, sensors):
