@@ -1,6 +1,9 @@
 import time
 import random
 
+# Match main/t_turn interpretation of calibrated floats
+LINE_THRESH = 0.55  # "this sensor sees line"
+
 def handle_fork(motors, sensors, direction="random"):
     """
     Executes a fork entry maneuver, then waits until a stable single line is reacquired.
@@ -20,7 +23,6 @@ def handle_fork(motors, sensors, direction="random"):
     print(f"Chose: {choice}")
 
     # ---------------- Phase 1: Commit to a branch (mostly blind) ----------------
-    # These timings are very track-dependent. Keep them close to your original values.
     if choice == "left":
         motors.set_speeds(-0.3, 0.3)
         time.sleep(0.20)
@@ -38,11 +40,8 @@ def handle_fork(motors, sensors, direction="random"):
         time.sleep(0.50)
 
     # ---------------- Phase 2: Reacquire a clean line before returning ----------------
-    # Goal: avoid returning while still on fork/intersection junk (multiple lines / blobs).
-    # Heuristic for digital sensors:
-    #   - center sees black
-    #   - black_count is in a "normal line" range (not 0, not huge)
-    # Tune BLACK_MIN/MAX for your track.
+    # Same idea as before, but adapted for float sensors:
+    # - black_count = number of sensors above LINE_THRESH
     BLACK_MIN = 1
     BLACK_MAX = 4
     STABLE_HITS_REQUIRED = 6
@@ -51,16 +50,16 @@ def handle_fork(motors, sensors, direction="random"):
     stable_hits = 0
 
     while True:
-        # Safety timeout so we never get stuck here
         if time.monotonic() - start > 2.0:
             print("WARN: Fork reacquire timeout, returning anyway.")
             break
 
         vals = sensors.read_calibrated()
-        black = sum(vals)
-        center_ok = (vals[3] == 1 or vals[4] == 1)
 
-        good = center_ok and (BLACK_MIN <= black <= BLACK_MAX)
+        black_count = sum(1 for v in vals if v >= LINE_THRESH)
+        center_ok = (vals[3] >= LINE_THRESH) or (vals[4] >= LINE_THRESH)
+
+        good = center_ok and (BLACK_MIN <= black_count <= BLACK_MAX)
 
         if good:
             stable_hits += 1
@@ -69,7 +68,6 @@ def handle_fork(motors, sensors, direction="random"):
         else:
             stable_hits = 0
 
-        # Gentle creep forward while searching for the “real” line
         motors.set_speeds(0.45, 0.45)
         time.sleep(0.01)
 

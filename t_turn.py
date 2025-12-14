@@ -10,6 +10,10 @@ SAMPLE_DT = 0.005
 CLEAR_SAMPLES = 8          # how many consecutive "mostly white" reads to confirm cleared
 ACQUIRE_SAMPLES = 6        # how many consecutive reads to confirm line acquired & centered
 CENTER_ERR_THRESH = 0.25   # abs(line_error) must be below this to stop spinning
+
+# Must match main's interpretation of calibrated float values
+LINE_THRESH = 0.55         # "this sensor sees line"
+WHITE_SUM_THRESH = 0.8     # sum(vals) <= this == "mostly white"
 # =================================================
 
 # Initialize TRX globally so we can log from anywhere
@@ -48,19 +52,23 @@ def execute_t_turn(motors, sensors, turn_left=True):
 
     def mostly_white():
         vals = sensors.read_calibrated()
-        # digital sensors: intersection/junk often gives lots of 1s
-        # "mostly white" means we've moved off the bar/cluster
-        return sum(vals) <= 1
+        # With float calibrated values, use sum threshold
+        return sum(vals) <= WHITE_SUM_THRESH
 
     def centered_on_line():
         vals = sensors.read_calibrated()
-        black = sum(vals)
 
-        center_ok = (vals[3] == 1 or vals[4] == 1)
+        # Count sensors that "see line"
+        black_count = sum(1 for v in vals if v >= LINE_THRESH)
+
+        # Center sensors see line
+        center_ok = (vals[3] >= LINE_THRESH) or (vals[4] >= LINE_THRESH)
+
+        # Use weighted error from sensors (still returns -1..1)
         err = sensors.get_line_error()
 
-        # must look like a single line, not a fat intersection blob
-        normal_line = (1 <= black <= 4)
+        # Must look like a single line, not a fat intersection blob
+        normal_line = (1 <= black_count <= 4)
 
         return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
 
