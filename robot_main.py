@@ -15,23 +15,51 @@ import t_turn
 MAX_DT = 0.05
 MAX_CORRECTION = 0.45
 BAR_HITS_REQUIRED = 3
+
+# Sensor thresholds for calibrated float values (0.0 white -> 1.0 black)
+LINE_THRESH = 0.55          # "this sensor sees line"
+BAR_THRESH = 0.80           # "this sensor is definitely on thick bar"
+BAR_COUNT_THRESH = 6        # how many sensors must see the bar
 # ----------------------------------------
 
 trx = TRX(printDebug=False, blinkDebug=False)
 trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
 
 
+def is_black_bar(vals):
+    """vals are floats 0..1. Detect thick horizontal bar."""
+    return sum(1 for v in vals if v >= BAR_THRESH) >= BAR_COUNT_THRESH
+
+
+def compute_line_error_from_vals(vals):
+    """
+    Weighted average like your ReflectiveArray.get_line_error(), but uses pre-read vals.
+    Returns -1..1.
+    """
+    weights = [-4, -3, -2, -1, 1, 2, 3, 4]
+    numerator = 0.0
+    denominator = 0.0
+
+    for i in range(8):
+        numerator += vals[i] * weights[i]
+        denominator += vals[i]
+
+    if denominator < 0.1:
+        return 0.0
+
+    return (numerator / denominator) / 4.0
+
+
 def execute_u_turn(motors, sensors):
     """
     Executes ~180-degree turn and reacquires the line going the opposite direction.
-    NO hardcoded left/right in main: we auto-pick a spin direction based on sensor snapshot.
+    Auto-picks left/right (no hardcoding).
     """
-
-    # Auto-pick direction from current sensor distribution (simple + effective)
+    # Auto-pick direction from current distribution
     vals0 = sensors.read_calibrated()
-    left_black = sum(vals0[:4])
-    right_black = sum(vals0[4:])
-    turn_left = (left_black >= right_black)  # tie -> left, but sensor-driven (not a constant)
+    left_strength = sum(vals0[:4])
+    right_strength = sum(vals0[4:])
+    turn_left = (left_strength >= right_strength)
 
     direction_str = "LEFT" if turn_left else "RIGHT"
     trx.sendMSG(f"Exec U-Turn: AUTO -> {direction_str}")
@@ -40,26 +68,31 @@ def execute_u_turn(motors, sensors):
     SAMPLE_DT = 0.005
     MIN_SPIN_TIME = 0.60
     MAX_SPIN_TIME = 4.0
-    WHITE_THRESH = 1
+    WHITE_SUM_THRESH = 0.8      # "mostly white" (sum of vals is small)
     ACQUIRE_SAMPLES = 8
     CENTER_ERR_THRESH = 0.25
+    TURN_SPEED = 0.5
 
     def mostly_white():
         vals = sensors.read_calibrated()
-        return sum(vals) <= WHITE_THRESH
+        return sum(vals) <= WHITE_SUM_THRESH
 
     def centered_on_line():
         vals = sensors.read_calibrated()
-        black = sum(vals)
-        center_ok = (vals[3] == 1 or vals[4] == 1)
-        err = sensors.get_line_error()
-        normal_line = (1 <= black <= 4)
+
+        # "center sees line" using float threshold
+        center_ok = (vals[3] >= LINE_THRESH) or (vals[4] >= LINE_THRESH)
+
+        # count of "line-like" sensors
+        black_count = sum(1 for v in vals if v >= LINE_THRESH)
+        normal_line = (1 <= black_count <= 4)
+
+        err = compute_line_error_from_vals(vals)
         return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
 
     motors.stop()
     time.sleep(0.05)
 
-    TURN_SPEED = 0.5
     if turn_left:
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
     else:
@@ -78,6 +111,7 @@ def execute_u_turn(motors, sensors):
         if mostly_white():
             saw_white = True
 
+        # gate reacquire so we don't micro-turn
         if elapsed < MIN_SPIN_TIME or not saw_white:
             time.sleep(SAMPLE_DT)
             continue
@@ -126,7 +160,10 @@ def set_follow_params(pid, section_name):
 def clear_black_bar(motors, sensors):
     motors.set_speeds(0.4, 0.4)
     clear_start = time.monotonic()
-    while sensors.is_black_bar() and (time.monotonic() - clear_start < 1.0):
+    while (time.monotonic() - clear_start < 1.0):
+        vals = sensors.read_calibrated()
+        if not is_black_bar(vals):
+            break
         time.sleep(0.01)
     time.sleep(0.05)
 
@@ -148,7 +185,6 @@ def run_robot():
     # --------------------
 
     pid = PID(kp=0.8, ki=0.0, kd=0.1)
-
     current_speed = set_follow_params(pid, "STRAIGHT")
 
     forward = True
@@ -207,8 +243,11 @@ def run_robot():
             if dt > MAX_DT:
                 dt = MAX_DT
 
+            # Read sensors ONCE per loop (RC timing is expensive)
+            vals = sensors.read_calibrated()
+
             # --- Black bar debounce ---
-            if sensors.is_black_bar():
+            if is_black_bar(vals):
                 black_bar_hits += 1
             else:
                 black_bar_hits = 0
@@ -233,7 +272,7 @@ def run_robot():
                     current_speed = set_follow_params(pid, "STRAIGHT")
 
                 elif event == "TTURN":
-                    # No hardcoded direction here: let your t_turn module decide its own behavior.
+                    # main doesn't choose direction; your module handles it
                     t_turn.execute_t_turn(motors, sensors)
                     current_speed = set_follow_params(pid, "STRAIGHT")
 
@@ -254,7 +293,7 @@ def run_robot():
                 continue
 
             # --- Normal PID line following ---
-            line_error = sensors.get_line_error()
+            line_error = compute_line_error_from_vals(vals)
             correction = pid.update(0.0, line_error, dt)
 
             if correction > MAX_CORRECTION:
@@ -263,7 +302,9 @@ def run_robot():
                 correction = -MAX_CORRECTION
 
             motors.set_speeds(current_speed - correction, current_speed + correction)
-            time.sleep(0.001)
+
+            # With RC timing sensors, this can be tiny (or even 0), but keep a yield
+            time.sleep(0.0005)
 
     except KeyboardInterrupt:
         print("\nCTRL+C detected. Stopping...")
