@@ -3,7 +3,7 @@ import time
 
 # ================= CONFIGURATION =================
 TURN_SPEED = 0.5
-BASE_SPEED = 0.5
+BASE_SPEED = 0.20
 
 # How stable things must be (tune if needed)
 SAMPLE_DT = 0.005

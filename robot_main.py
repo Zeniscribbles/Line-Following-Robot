@@ -44,7 +44,7 @@ TRACK_SEQUENCE = [
     {"name": "DO_TTURN_LEFT",    "action": t_turn.execute_t_turn, "args": {"turn_left": True}, "gaps_allowed": True},
     
     # Event 3: Fork (Entering Serpentine/Complex)
-    {"name": "DO_FORK",          "action": fork.handle_fork, "args": {"direction": "random"}, "gaps_allowed": False},
+    {"name": "DO_FORK",          "action": fork.run_fork_test, "args": {"direction": "random"}, "gaps_allowed": False},
     
     # Event 4: U-Turn (Returning)
     {"name": "DO_UTURN",         "action": "UTURN_FUNC", "gaps_allowed": False}, 

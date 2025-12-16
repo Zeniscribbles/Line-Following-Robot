@@ -135,3 +135,80 @@ def turn_180(motors, sensors):
     motors.stop()
     time.sleep(0.2)
 
+def run_fork_test(motors, sensors):
+    KP = 0.40
+    KI = 0.01
+    KD = 0.055
+    BASE_SPEED = 0.20
+    
+    pid = PID(kp=KP, ki=KI, kd=KD)
+    
+    MARKER_DEBOUNCE = 2.0
+    
+    # Track the last path taken so we know how to correct at the end
+    last_choice = None 
+    at_end_zone = False 
+
+    try:
+        while True:
+            # --- SENSOR READ ---
+            vals = sensors.read_calibrated()
+            current_time = time.monotonic()
+            
+            # Intersection Detection
+            black_count = sum(1 for v in vals if v > 0.6)
+            outer_trigger = (vals[0] > 0.5 and vals[7] > 0.5)
+            density_trigger = (black_count >= 6) # Slightly relaxed density
+            
+            is_intersection = (outer_trigger or density_trigger)
+
+            # --- INTERSECTION LOGIC ---
+            if is_intersection and (current_time - last_marker_time > MARKER_DEBOUNCE):
+                motors.stop()
+                print("Intersection Detected.")
+                
+                # CASE 1: ARRIVAL (We just finished a path)
+                if last_choice is not None:
+                    # Perform the specific "force and jolt" logic you requested
+                    force_align_and_cross(motors, sensors, last_choice)
+                    
+                    # Now turn around
+                    turn_180(motors, sensors)
+                    
+                    # We are now facing the fork again.
+                    # We treat this as "Starting" a new path.
+                    # We align normally to ensure we are straight before choosing.
+                    standard_align(motors, sensors)
+                    
+                else:
+                    # CASE 2: FIRST START (No path taken yet)
+                    # Just push through slightly to get on the bar, then align
+                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                    time.sleep(0.1)
+                    standard_align(motors, sensors)
+
+                # --- CHOOSE NEW PATH ---
+                if not at_end_zone:
+                    print("Status: Entering Fork")
+                    last_choice = execute_random_fork(motors)
+                    at_end_zone = True
+                else:
+                    print("Status: Leaving End Zone")
+                    last_choice = execute_random_fork(motors)
+                    at_end_zone = False 
+                
+                # Reset
+                pid.reset()
+                last_time = time.monotonic()
+                last_marker_time = time.monotonic()
+                continue
+
+            # --- PID CONTROL ---
+            dt = current_time - last_time
+            last_time = current_time
+            error = sensors.get_line_error()
+            correction = pid.update(0.0, error, dt)
+            motors.set_speeds(BASE_SPEED - correction, BASE_SPEED + correction)
+
+    except KeyboardInterrupt:
+        motors.stop()
