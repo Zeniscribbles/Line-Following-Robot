@@ -9,12 +9,12 @@ from esp32_trx import TRX
 
 
 # ================= CONFIGURATION =================
-TURN_SPEED          = 0.4
-BASE_SPEED          = 0.35
-CORNER_SENSITIVITY  = 0.8
-ALL_WHITE_THRESHOLD = 0.2
-MEMORY_THRESHOLD    = 0.5
-HARD_TURN_DURATION  = 0.3
+TURN_SPEED          = 0.4   # Speed for hard 90-degree turns
+BASE_SPEED          = 0.35  # Normal driving speed
+CORNER_SENSITIVITY  = 0.8   # 0.0 to 1.0 (How dark edge must be to trigger hard turn)
+ALL_WHITE_THRESHOLD = 0.2   # If all sensors are below this, we are lost
+MEMORY_THRESHOLD    = 0.5   # Only update memory if signal is stronger than this
+HARD_TURN_DURATION  = 0.3   # Seconds to lock into a hard turn (blind)
 SEND_TRX            = True
 # =================================================
 
