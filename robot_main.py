@@ -10,6 +10,22 @@ from esp32_trx import TRX
 import fork
 import t_turn
 
+# ---------------- WRAPPERS ----------------
+def do_fork_action(motors, sensors, **kwargs):
+    """Aligns, chooses a path, executes it, and saves the choice."""
+    global LAST_FORK_CHOICE
+    fork.standard_align(motors, sensors)
+    LAST_FORK_CHOICE = fork.execute_random_fork(motors)
+
+def fork_return_action(motors, sensors, **kwargs):
+    """Uses the saved choice to align correctly and cross the bar."""
+    global LAST_FORK_CHOICE
+    if LAST_FORK_CHOICE is None:
+        print("WARNING: No choice saved. Defaulting to CENTER.")
+        LAST_FORK_CHOICE = 'CENTER'
+    
+    fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
+
 # ---------------- CONFIGURATION ----------------
 # --- UNIVERSAL TUNING (One reliable set) ---
 KP = 0.40
@@ -44,14 +60,14 @@ TRACK_SEQUENCE = [
     {"name": "DO_TTURN_LEFT",    "action": t_turn.execute_t_turn, "args": {"turn_left": True}, "gaps_allowed": True},
     
     # Event 3: Fork (Entering Serpentine/Complex)
-    {"name": "DO_FORK",          "action": fork.handle_fork, "args": {"direction": "random"}, "gaps_allowed": False},
+    {"name": "DO_FORK",          "action": do_fork_action, "gaps_allowed": False},
     
     # Event 4: U-Turn (Returning)
-    {"name": "DO_UTURN",         "action": "UTURN_FUNC", "gaps_allowed": False}, 
+    # {"name": "DO_UTURN",         "action": "UTURN_FUNC", "gaps_allowed": False}, 
 
     # --- RETURN PASS ---
     # Event 5: Fork Return (Entering Straight)
-    {"name": "FORK_RETURN",      "action": None, "gaps_allowed": True},
+    {"name": "FORK_RETURN",      "action": fork_return_action, "gaps_allowed": False},
     
     # Event 6: T-Turn Right (Entering Straight)
     {"name": "DO_TTURN_RIGHT",   "action": t_turn.execute_t_turn, "args": {"turn_left": False}, "gaps_allowed": True},
@@ -177,7 +193,7 @@ def run_robot():
                 if action == "STOP":
                     print("FINISH LINE")
                     break
-                    
+
                 elif callable(action):
                     action(motors, sensors, **args)
                                 
