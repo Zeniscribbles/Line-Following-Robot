@@ -14,7 +14,8 @@ CORNER_SENSITIVITY  = 0.8
 ALL_WHITE_THRESHOLD = 0.2
 MEMORY_THRESHOLD    = 0.5
 HARD_TURN_DURATION  = 0.3
-SEND_TRX            = True
+BAR_THRESH          = 0.80     # Matched to robot_main
+BAR_COUNT_THRESH    = 6        # Matched to robot_main
 # =================================================
 
 
@@ -29,6 +30,10 @@ def read_line_state(sensors, last_valid_error):
 
     return vals, max_reflection, is_lost, last_valid_error
 
+def is_black_bar(vals):
+    """Detects if we have hit the next black bar (Exit Condition)."""
+    count = sum(1 for v in vals if v >= BAR_THRESH)
+    return count >= BAR_COUNT_THRESH
 
 # -------------- CONTROL LOGIC --------------------
 def apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
@@ -71,50 +76,55 @@ def run_line_follower(motors, sensors, pid):
     turn_lock_until = 0.0
     turn_lock_direction = 0  # -1 left, +1 right
 
-    while True:
+while True:
         now = time.monotonic()
 
         dt = now - last_time
         last_time = now
 
+        # 1. Read Sensors
         vals, max_reflection, is_lost, last_valid_error = read_line_state(sensors, last_valid_error)
 
+        # 2. EXIT CONDITION: Check for next state trigger
+        if is_black_bar(vals):
+            print(">>> T-TURN COMPLETE: Bar detected. Returning to Main.")
+            motors.stop()
+            return # Breaks the loop and returns control to robot_main
+
+        # 3. Turn Lock
         if apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
             continue
 
-        triggered, new_until, new_dir = trigger_hard_turn_if_needed(trx, motors, vals, now)
+        # 4. Check for Intersections
+        triggered, new_until, new_dir = trigger_hard_turn_if_needed(motors, vals, now)
         if triggered:
             turn_lock_until = new_until
             turn_lock_direction = new_dir
             continue
 
+        # 5. Lost Line Logic
         if is_lost:
-            handle_lost_line(trx, motors, last_valid_error)
+            handle_lost_line(motors, last_valid_error)
             continue
 
+        # 6. Standard PID
         pid_drive(motors, sensors, pid, dt)
 
-
 # ================== PUBLIC ENTRYPOINT ==================
-def run_t_turns(
-    *,
-    peer_mac=bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]),
-    kp=0.40, ki=0.01, kd=0.055,
-    do_calibration=True,
-):
+def run_t_turns(motors, sensors, **kwargs):
     """
-    Call this from another file to run the T-turn behavior.
-
-    Example:
-        from t_turns_module import run_t_turns
-        run_t_turns()
+    Revised entrypoint to accept existing hardware objects.
     """
-    motors = MotorDriver()
-    sensors = ReflectiveArray()
+    # Extract config from kwargs or use defaults
+    kp = kwargs.get('kp', 0.40)
+    ki = kwargs.get('ki', 0.01)
+    kd = kwargs.get('kd', 0.055)
+    
+    # Create a local PID instance (safe to do)
     pid = PID(kp=kp, ki=ki, kd=kd)
-
 
     try:
         run_line_follower(motors, sensors, pid)
     except KeyboardInterrupt:
         motors.stop()
+        raise # Allow Ctrl+C to propagate up

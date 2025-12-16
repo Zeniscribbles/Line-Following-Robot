@@ -21,7 +21,7 @@ def fork_return_action(motors, sensors, **kwargs):
     """Uses the saved choice to align correctly and cross the bar."""
     global LAST_FORK_CHOICE
     if LAST_FORK_CHOICE is None:
-        print("WARNING: No choice saved. Defaulting to CENTER.")
+        trx.sendMSG("WARNING: No choice saved. Defaulting to CENTER.")
         LAST_FORK_CHOICE = 'CENTER'
     
     fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
@@ -69,10 +69,10 @@ TRACK_SEQUENCE = [
 trx = TRX(printDebug=False, blinkDebug=False)
 trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
 
-def is_black_bar(vals):
-    """Returns True if it sees a thick black bar."""
-    count = sum(1 for v in vals if v >= BAR_THRESH)
-    return count >= BAR_COUNT_THRESH
+def current_frame_is_bar(vals):
+    # Returns True if 6 or more sensors are seeing black (> 0.8)
+    black_count = sum(1 for v in vals if v > BAR_THRESH)
+    return black_count >= BAR_COUNT_THRESH
 
 def is_line_lost(vals):
     """Returns True if sensors see all white (Gap)."""
@@ -89,29 +89,37 @@ def run_robot():
         start_button.direction = digitalio.Direction.INPUT
         start_button.pull = digitalio.Pull.UP
         HAS_BUTTON = True
-        print("Button initialized on D12")
+        trx.sendMSG("Button initialized on D12")
     except Exception as e:
-        print(f"Button setup skipped: {e}")
+        trx.sendMSG(f"Button setup skipped: {e}")
         HAS_BUTTON = False
 
     # --- CALIBRATION ---
-    print("--- CALIBRATION ---")
-    print("Place robot ON THE TRACK (Spinning in 2s...)")
+    trx.sendMSG("--- CALIBRATION ---")
+    trx.sendMSG("Place robot ON THE TRACK (Spinning in 2s...)")
     time.sleep(2)
     motors.set_speeds(0.25, -0.25)
     start_cal = time.monotonic()
     while time.monotonic() - start_cal < 2.0:
         sensors.read_calibrated()
     motors.stop()
-    print("Calibration Done.")
+    trx.sendMSG("Calibration Done.")
+    
+    # REPORT SENSOR HEALTH
+    # This tells you if the robot is actually seeing black!
+    cal_read = sensors.read_calibrated()
+    max_val = max(cal_read)
+    trx.sendMSG(f"Calib Max: {max_val:.2f}")
+    if max_val < 0.6:
+        trx.sendMSG("WARNING: SENSORS NOT SEEING DARK BLACK!")
     
     # --- WAIT FOR START ---
     if HAS_BUTTON:
-        print(">>> Press Button to Start... <<<")
+        trx.sendMSG(">>> Press Button to Start... <<<")
         while start_button.value: time.sleep(0.1) 
         while not start_button.value: time.sleep(0.1) 
     else:
-        print("No button. Starting in 2s...")
+        trx.sendMSG("No button. Starting in 2s...")
         time.sleep(2)
     
     # --- INITIALIZE STATE ---
@@ -120,18 +128,21 @@ def run_robot():
     
     track_index = 0
     bar_hits = 0
-    # Initially False because we start on a bar/Serpentine
-    gaps_allowed = False 
-    last_time = time.monotonic()
 
-    print(f"Ready. Next Event: {TRACK_SEQUENCE[0]['name']}")
+    current_track = TRACK_SEQUENCE[track_index]
+    gaps_allowed = current_track["gaps_allowed"]
+
+    last_time = time.monotonic()
+    last_debug_time = time.monotonic() # Timer for printing
+
+    trx.sendMSG(f"Ready. Next Event: {TRACK_SEQUENCE[0]['name']}")
 
     try:
         while True:
             # 1. Killswitch
             if HAS_BUTTON and not start_button.value:
                 motors.stop()
-                print(">>> STOP BUTTON PRESSED")
+                trx.sendMSG(">>> STOP BUTTON PRESSED")
                 while not start_button.value: time.sleep(0.1)
                 break
 
@@ -143,58 +154,81 @@ def run_robot():
 
             # 3. Read Sensors
             vals = sensors.read_calibrated()
-
-            # --- A. Check for Black Bar (Sequence Trigger) ---
-            if is_black_bar(vals):
+            
+            # ==========================================================
+            # ROBUST BAR DETECTION (The Fix)
+            # ==========================================================
+            if current_frame_is_bar(vals):
                 bar_hits += 1
             else:
-                bar_hits = 0
-
-            if bar_hits >= BAR_HITS_REQUIRED:
-                print(f">>> BAR DETECTED: Triggering {TRACK_SEQUENCE[track_index]['name']}")
-                motors.stop()
-                time.sleep(0.05)
-
-                # --- CLEAR BAR (Drive Blindly Past It) ---
-                motors.set_speeds(BASE_SPEED, BASE_SPEED)
-                time.sleep(BAR_CLEAR_TIME)
-
-                # Keep creeping until we're OFF the bar
-                clear_start = time.monotonic()
-                while is_black_bar(sensors.read_calibrated()) and (time.monotonic() - clear_start < 1.0):
-                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
-                    time.sleep(0.05)
+                bar_hits -= 1
+                if bar_hits < 0: bar_hits = 0
                 
-                motors.stop()
-                time.sleep(0.05)
-                            
-                current_event = TRACK_SEQUENCE[track_index]
-                action = current_event["action"]
-                gaps_allowed = current_event["gaps_allowed"] # Update Gap Logic
-                args = current_event.get("args", {})
+            # Debugging (ANTI-FREEZE: Only prints every 0.5s)
+            if now - last_debug_time > 0.5:
+                # format: [State] Hits: X | MaxSensor: 0.XX
+                print(f"[{current_track['name']}] Hits:{bar_hits} | Max:{max(vals):.2f}")
+                last_debug_time = now
 
-                if action == "STOP":
-                    print("FINISH LINE")
-                    break
-
-                elif callable(action):
-                    action(motors, sensors, **args)
-                                
+            # TRIGGER TRANSITION
+            if bar_hits >= 5:
+                trx.sendMSG(f">>> BAR DETECTED! Leaving {current_track['name']}")
+                
+                # 1. Update State
                 track_index += 1
                 if track_index >= len(TRACK_SEQUENCE):
-                    print("Sequence Complete!")
+                    trx.sendMSG("Sequence Complete!")
+                    motors.stop()
                     break
 
+                # 2. CLEAR THE BAR (Crucial: Get off the line so we don't trigger again)
+                #    We drive blind for a moment to get the sensors past the black line.
+                trx.sendMSG("   -> Clearing Bar...")
+                motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                time.sleep(BAR_CLEAR_TIME) 
+                motors.stop()
+                #time.sleep(0.2) # Adjust this time! (0.15 to 0.3 usually)
+                
+                # Optional: Ensure we are really off it (Safety check)
+                # while is_black_bar(sensors.read_calibrated()):
+                #     motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                
+                motors.stop()
+                time.sleep(0.1) # Stabilization pause
+
+                # 3. GET NEW TRACK INFO
+                current_track = TRACK_SEQUENCE[track_index]
+                gaps_allowed = current_track["gaps_allowed"]
+
+                trx.sendMSG(f">>> ENTERING: {current_track['name']}")
+
+                
+                # 4. EXECUTE SPECIAL ACTION (e.g., T-Turn or Fork)
+                #    If the new state has a blocking action, run it NOW.
+                if current_track["action"] is not None:
+                    trx.sendMSG(f"   -> Executing Action for {current_track['name']}")
+                    # Pass motors/sensors to the function (e.g., t_turn.run_t_turns)
+                    current_track["action"](motors, sensors)
+                    
+                    # After action, reset variables for the NEXT segment
+                    pid.reset()
+                    bar_hits = 0
+                    last_time = time.monotonic()
+                    continue # Skip the rest of the loop, start fresh
+
+                # 5. IF NO ACTION (Just a straightaway/serpentine):
+                #    Reset variables and fall through to normal PID driving
                 pid.reset()
                 bar_hits = 0
                 last_time = time.monotonic()
                 continue 
+            # ==========================================================
 
             # --- B. Check for Gaps (Line Lost) ---
             if is_line_lost(vals):
                 if gaps_allowed:
                     # Drive Straight Blindly
-                    # print("In Gap - Driving Blind") 
+                    # trx.sendMSG("In Gap - Driving Blind") 
                     motors.set_speeds(BASE_SPEED, BASE_SPEED)
                 else:
                     # Safety Stop (We shouldn't lose the line here)
