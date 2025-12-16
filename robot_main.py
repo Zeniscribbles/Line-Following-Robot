@@ -79,57 +79,6 @@ def is_line_lost(vals):
     """Returns True if sensors see all white (Gap)."""
     return max(vals) < GAP_THRESH
 
-def execute_u_turn(motors, sensors):
-    """Executes ~180-degree turn."""
-    trx.sendMSG("Exec U-Turn")
-    print("Exec U-Turn")
-
-    TURN_SPEED = 0.35
-    MIN_SPIN_TIME = 0.6
-    MAX_SPIN_TIME = 4.0
-    WHITE_SUM_THRESH = 1.0 
-    ACQUIRE_SAMPLES = 6
-
-    motors.stop()
-    time.sleep(0.1)
-
-    # Spin Left
-    motors.set_speeds(-TURN_SPEED, TURN_SPEED)
-
-    spin_start = time.monotonic()
-    saw_white = False
-    stable_count = 0
-
-    while True:
-        elapsed = time.monotonic() - spin_start
-        if elapsed > MAX_SPIN_TIME:
-            print("U-Turn Timeout")
-            break
-
-        vals = sensors.read_calibrated()
-        
-        # 1. Wait until we leave the current black line
-        if sum(vals) <= WHITE_SUM_THRESH:
-            saw_white = True
-
-        # 2. Gate re-acquisition
-        if elapsed < MIN_SPIN_TIME or not saw_white:
-            continue
-
-        # 3. Check for new line centered
-        center_hit = (vals[3] > 0.5 or vals[4] > 0.5)
-        line_mass = sum(1 for v in vals if v > 0.5)
-        
-        if center_hit and (1 <= line_mass <= 4):
-            stable_count += 1
-            if stable_count >= ACQUIRE_SAMPLES:
-                break 
-        else:
-            stable_count = 0
-
-    motors.stop()
-    time.sleep(0.1)
-    print("U-Turn Complete")
 
 def run_robot():
     # --- HARDWARE SETUP ---
@@ -228,8 +177,7 @@ def run_robot():
                 if action == "STOP":
                     print("FINISH LINE")
                     break
-                elif action == "UTURN_FUNC":
-                    execute_u_turn(motors, sensors)
+                    
                 elif callable(action):
                     action(motors, sensors, **args)
                                 
