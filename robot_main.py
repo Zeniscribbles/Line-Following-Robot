@@ -27,7 +27,7 @@ def fork_return_action(motors, sensors, **kwargs):
     fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
 
 # ---------------- CONFIGURATION ----------------
-# --- UNIVERSAL TUNING (One reliable set) ---
+# --- UNIVERSAL TUNING (One reliable set) -------
 KP = 0.40
 KI = 0.01
 KD = 0.055
@@ -57,21 +57,18 @@ TRACK_SEQUENCE = [
     {"name": "END_SERPENTINE",   "action": None, "gaps_allowed": True},
     
     # Event 2: T-Turn Left (Entering Straight)
-    {"name": "DO_TTURN_LEFT",    "action": t_turn.execute_t_turn, "args": {"turn_left": True}, "gaps_allowed": True},
-    
+    {"name": "DO_TTURN", "action": t_turn.execute_t_turn, "gaps_allowed": True},
+
     # Event 3: Fork (Entering Serpentine/Complex)
     {"name": "DO_FORK",          "action": do_fork_action, "gaps_allowed": False},
     
-    # Event 4: U-Turn (Returning)
-    # {"name": "DO_UTURN",         "action": "UTURN_FUNC", "gaps_allowed": False}, 
-
     # --- RETURN PASS ---
     # Event 5: Fork Return (Entering Straight)
     {"name": "FORK_RETURN",      "action": fork_return_action, "gaps_allowed": False},
     
     # Event 6: T-Turn Right (Entering Straight)
-    {"name": "DO_TTURN_RIGHT",   "action": t_turn.execute_t_turn, "args": {"turn_left": False}, "gaps_allowed": True},
-    
+    {"name": "DO_TTURN", "action": t_turn.execute_t_turn, "gaps_allowed": True},
+
     # Event 7: Start Serpentine Return (Entering Serpentine)
     {"name": "START_SERP_RET",   "action": None, "gaps_allowed": False},
     
