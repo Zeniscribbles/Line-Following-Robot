@@ -27,7 +27,7 @@ def fork_return_action(motors, sensors, **kwargs):
     fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
 
 # ---------------- CONFIGURATION ----------------
-# --- UNIVERSAL TUNING (One reliable set) ---
+# --- UNIVERSAL TUNING (One reliable set) -------
 KP = 0.40
 KI = 0.01
 KD = 0.055
@@ -48,39 +48,25 @@ GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10 (White)
 # "gaps_allowed": True = If line is lost, DRIVE STRAIGHT (Blind).
 # "gaps_allowed": False = If line is lost, STOP (Safety).
 TRACK_SEQUENCE = [
-    # Event 0: START LINE (Start on bar -> Go immediately)
-    # Enters Serpentine -> NO GAPS ALLOWED in squiggles.
-    {"name": "START_LINE",       "action": None, "gaps_allowed": False},
-    
-    # Event 1: End of Serpentine (Entering Straightaway)
-    # Enters Straight -> GAPS ALLOWED (Blind Drive OK).
-    {"name": "END_SERPENTINE",   "action": None, "gaps_allowed": True},
-    
-    # Event 2: T-Turn Left (Entering Straight)
-    {"name": "DO_TTURN_LEFT",    "action": t_turn.execute_t_turn, "args": {"turn_left": True}, "gaps_allowed": True},
-    
-    # Event 3: Fork (Entering Serpentine/Complex)
-    {"name": "DO_FORK",          "action": fork.run_fork_test, "args": {"direction": "random"}, "gaps_allowed": False},
-    
-    # Event 4: U-Turn (Returning)
-    # {"name": "DO_UTURN",         "action": "UTURN_FUNC", "gaps_allowed": False}, 
+    {"name": "START/FINISH",     "action": None,                 "gaps_allowed": False},  # bottom-left bar
 
-    # --- RETURN PASS ---
-    # Event 5: Fork Return (Entering Straight)
-    {"name": "FORK_RETURN",      "action": fork_return_action, "gaps_allowed": False},
+    {"name": "STRAIGHTAWAY",     "action": None,                  "gaps_allowed": True},   # top-left bar
+
+    {"name": "T_SECTION",        "action": t_turn.run_t_turns,    "gaps_allowed": True},   # top-right bar
+
+    {"name": "FORK_GO",          "action": do_fork_action,        "gaps_allowed": False},  # mid-right bar
+
+    {"name": "TURNAROUND",       "action": None,                  "gaps_allowed": False},  # mid-left bar
+
+    {"name": "FORK_RETURN",      "action": fork_return_action,    "gaps_allowed": False},  # mid-right bar again
+
+    {"name": "T_SECTION_RETURN", "action": t_turn.run_t_turns,    "gaps_allowed": True},   # (if you truly have a bar for this; see note)
     
-    # Event 6: T-Turn Right (Entering Straight)
-    {"name": "DO_TTURN_RIGHT",   "action": t_turn.execute_t_turn, "args": {"turn_left": False}, "gaps_allowed": True},
-    
-    # Event 7: Start Serpentine Return (Entering Serpentine)
-    {"name": "START_SERP_RET",   "action": None, "gaps_allowed": False},
-    
-    # Event 8: End Serpentine Return (Entering Straight Dash)
-    {"name": "END_SERP_RET",     "action": None, "gaps_allowed": True},
-    
-    # Event 9: Finish Line
-    {"name": "FINISH",           "action": "STOP", "gaps_allowed": False}
+    {"name": "SERP_RETURN",      "action": None,                  "gaps_allowed": False},  # top-left bar again
+
+    {"name": "FINISH",           "action": "STOP",                "gaps_allowed": False},  # bottom-left bar again
 ]
+
 # -----------------------------------------------
 
 trx = TRX(printDebug=False, blinkDebug=False)

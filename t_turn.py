@@ -1,139 +1,229 @@
 import time
-# from esp32_trx import TRX
+import board
+import digitalio
+
+from motor_driver_subsystem_2channel import MotorDriver
+from reflective_array_subsystem import ReflectiveArray
+from PID import PID
+from esp32_trx import TRX
+
 
 # ================= CONFIGURATION =================
-TURN_SPEED = 0.5
-BASE_SPEED = 0.20
-
-# How stable things must be (tune if needed)
-SAMPLE_DT = 0.005
-CLEAR_SAMPLES = 8          # how many consecutive "mostly white" reads to confirm cleared
-ACQUIRE_SAMPLES = 6        # how many consecutive reads to confirm line acquired & centered
-CENTER_ERR_THRESH = 0.25   # abs(line_error) must be below this to stop spinning
-
-# Start-bar (horizontal black marker) clearing
-BAR_THRESH = 6             # bar = >= this many sensors see black
-BAR_HITS = 3               # debounce hits for confirmed bar detect
-BAR_BLIND_S = 0.14         # blind-drive time to shove past bar
-BAR_CLEAR_SAMPLES = 4      # consecutive samples below BAR_THRESH to confirm bar cleared
+TURN_SPEED          = 0.4
+BASE_SPEED          = 0.35
+CORNER_SENSITIVITY  = 0.8
+ALL_WHITE_THRESHOLD = 0.2
+MEMORY_THRESHOLD    = 0.5
+HARD_TURN_DURATION  = 0.3
+SEND_TRX            = True
 # =================================================
 
-# Initialize TRX globally so we can log from anywhere
-# trx = TRX(printDebug=False, blinkDebug=False)
-# trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
+
+# ------------------ TRX HELPERS ------------------
+def setup_trx():
+    trx = TRX(printDebug=False, blinkDebug=False)
+    trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
+    return trx
+
+def log(trx, msg):
+    if SEND_TRX and trx:
+        trx.sendMSG(msg)
 
 
-def _stable_condition(cond_fn, required_hits, timeout_s):
-    """True if cond_fn() is true for required_hits consecutive samples before timeout."""
+# ---------------- BUTTON / START -----------------
+def setup_start_button(pin=board.D12):
+    """Returns (has_button, button_or_none)."""
+    try:
+        btn = digitalio.DigitalInOut(pin)
+        btn.direction = digitalio.Direction.INPUT
+        btn.pull = digitalio.Pull.UP
+        return True, btn
+    except Exception:
+        return False, None
+
+def wait_for_start(trx, has_button, button):
+    log(trx, "Place robot on line. Press Button to Start.")
+    if has_button:
+        # wait for press (active-low)
+        while button.value:
+            time.sleep(0.1)
+        # wait for release
+        while not button.value:
+            time.sleep(0.1)
+    else:
+        time.sleep(2)
+    log(trx, "GO!")
+
+
+# ---------------- CALIBRATION --------------------
+def calibrate_sensors(trx, motors, sensors, spin_time=2.0, settle_time=2.0):
+    log(trx, "---------------------------------------------")
+    log(trx, "CALIBRATION MODE")
+    log(trx, "Place robot ON the line.")
+    log(trx, f"You have {settle_time} seconds to get ready...")
+    time.sleep(settle_time)
+
+    log(trx, "Calibrating... (Spinning)")
+    motors.set_speeds(0.3, -0.3)
+
     start = time.monotonic()
-    hits = 0
-    while True:
-        if time.monotonic() - start > timeout_s:
-            return False
-        if cond_fn():
-            hits += 1
-            if hits >= required_hits:
-                return True
-        else:
-            hits = 0
-        time.sleep(SAMPLE_DT)
-
-
-def clear_start_bar(motors, sensors, speed=BASE_SPEED):
-    """
-    Blind-drive off the horizontal start bar so the turn logic doesn't get confused by it.
-    """
-    # Optional: reset the internal debounce counter (only matters if you use confirmed)
-    if hasattr(sensors, "reset_bar_detector"):
-        sensors.reset_bar_detector()
-
-    # If we're not actually on the bar, do nothing.
-    on_bar = False
-    if hasattr(sensors, "is_black_bar_confirmed"):
-        on_bar = sensors.is_black_bar_confirmed(threshold=BAR_THRESH, required_hits=BAR_HITS)
-    elif hasattr(sensors, "black_count"):
-        on_bar = sensors.black_count() >= BAR_THRESH
-
-    if not on_bar:
-        return
-
-    # trx.sendMSG("Start bar: blind drive")
-    motors.set_speeds(speed, speed)
-
-    # 1) guaranteed shove forward (no sensor logic)
-    time.sleep(BAR_BLIND_S)
-
-    # 2) then wait until we're no longer on a "big blob" of black
-    if hasattr(sensors, "black_count"):
-        _stable_condition(
-            lambda: sensors.black_count() < BAR_THRESH,
-            required_hits=BAR_CLEAR_SAMPLES,
-            timeout_s=0.8
-        )
+    while (time.monotonic() - start) < spin_time:
+        sensors.read_calibrated()
+        time.sleep(0.01)
 
     motors.stop()
-    time.sleep(0.05)
+    log(trx, "Calibration Done.")
+    log(trx, f"Ranges: {[(int(mn), int(mx)) for mn, mx in zip(sensors.min_vals, sensors.max_vals)]}")
+    log(trx, "---------------------------------------------")
 
 
-def execute_t_turn(motors, sensors, turn_left=True):
+# ---------------- PAUSE / RESUME -----------------
+def handle_pause_if_pressed(trx, has_button, button, motors, pid):
     """
-    Executes a 90-degree turn using sensors to define start/stop points.
-
-    Phases:
-    0) Blind-drive off the horizontal start bar (if present)
-    1) Drive forward until the intersection is cleared (mostly white, stable)
-    2) Spin until we're no longer seeing the old bar (mostly white, stable)
-    3) Continue spinning until we reacquire the new line stably and roughly centered
+    Pause if button pressed (active-low).
+    Returns True if pause/resume happened (caller should reset timing).
     """
-    direction_str = "LEFT" if turn_left else "RIGHT"
-    # trx.sendMSG(f"Exec T-Turn: {direction_str}")
-    print(f"Exec T-Turn: {direction_str}")
+    if not has_button:
+        return False
 
-    def mostly_white():
-        vals = sensors.read_calibrated()
-        # "mostly white" means we've moved off the bar/cluster
-        return sum(vals) <= 1
-
-    def centered_on_line():
-        vals = sensors.read_calibrated()
-        black = sum(vals)
-
-        center_ok = (vals[3] == 1 or vals[4] == 1)
-        err = sensors.get_line_error()
-
-        # must look like a single line, not a fat intersection blob
-        normal_line = (1 <= black <= 4)
-
-        return center_ok and normal_line and (abs(err) < CENTER_ERR_THRESH)
-
-    try:
-        # --- PHASE 0: CLEAR THE START BAR (IF PRESENT) ---
-        clear_start_bar(motors, sensors, speed=BASE_SPEED)
-
-        # --- PHASE 1: CLEAR THE INTERSECTION ---
-        motors.set_speeds(BASE_SPEED, BASE_SPEED)
-        ok = _stable_condition(mostly_white, required_hits=CLEAR_SAMPLES, timeout_s=2.0)
-        # trx.sendMSG("Intersection Cleared" if ok else "WARN: Align Timeout")
-
+    if not button.value:
         motors.stop()
-        time.sleep(0.08)
+        while not button.value:
+            time.sleep(0.1)
 
-        # --- PHASE 2: START SPIN ---
-        # trx.sendMSG("Spinning...")
-        if turn_left:
+        log(trx, "PAUSED. Press button to resume.")
+
+        while button.value:      # wait for press
+            time.sleep(0.1)
+        while not button.value:  # wait for release
+            time.sleep(0.1)
+
+        log(trx, "RESUMING...")
+        pid.reset()
+        return True
+
+    return False
+
+
+# --------------- SENSOR STATE --------------------
+def read_line_state(sensors, last_valid_error):
+    vals = sensors.read_calibrated()
+    max_reflection = max(vals)
+    is_lost = (max_reflection < ALL_WHITE_THRESHOLD)
+
+    if max_reflection > MEMORY_THRESHOLD:
+        last_valid_error = sensors.get_line_error()
+
+    return vals, max_reflection, is_lost, last_valid_error
+
+
+# -------------- CONTROL LOGIC --------------------
+def apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
+    if now < turn_lock_until:
+        if turn_lock_direction == -1:
             motors.set_speeds(-TURN_SPEED, TURN_SPEED)
         else:
             motors.set_speeds(TURN_SPEED, -TURN_SPEED)
+        return True
+    return False
 
-        # First: ensure we rotated away from the edge we just left
-        _stable_condition(mostly_white, required_hits=6, timeout_s=1.0)
+def trigger_hard_turn_if_needed(trx, motors, vals, now):
+    if vals[0] > CORNER_SENSITIVITY:
+        log(trx, ">>> Hard Left Lock!")
+        motors.set_speeds(-TURN_SPEED, TURN_SPEED)
+        return True, now + HARD_TURN_DURATION, -1
 
-        # --- PHASE 3: ACQUIRE NEW LINE STABLY + CENTERED ---
-        ok = _stable_condition(centered_on_line, required_hits=ACQUIRE_SAMPLES, timeout_s=3.0)
-        # trx.sendMSG("Line Acquired" if ok else "ERR: Spin Timeout")
+    if vals[7] > CORNER_SENSITIVITY:
+        log(trx, ">>> Hard Right Lock!")
+        motors.set_speeds(TURN_SPEED, -TURN_SPEED)
+        return True, now + HARD_TURN_DURATION, 1
 
-    finally:
+    return False, 0.0, 0
+
+def handle_lost_line(trx, motors, last_valid_error):
+    if last_valid_error < 0:
+        log(trx, "Lost! Spinning Left...")
+        motors.set_speeds(-TURN_SPEED, TURN_SPEED)
+    else:
+        log(trx, "Lost! Spinning Right...")
+        motors.set_speeds(TURN_SPEED, -TURN_SPEED)
+
+def pid_drive(motors, sensors, pid, dt):
+    err = sensors.get_line_error()
+    correction = pid.update(0.0, err, dt)
+    motors.set_speeds(BASE_SPEED - correction, BASE_SPEED + correction)
+
+
+# ------------------ MAIN LOOP --------------------
+def run_line_follower(trx, motors, sensors, pid, has_button, button):
+    last_valid_error = 0.0
+    last_time = time.monotonic()
+
+    turn_lock_until = 0.0
+    turn_lock_direction = 0  # -1 left, +1 right
+
+    while True:
+        now = time.monotonic()
+
+        paused = handle_pause_if_pressed(trx, has_button, button, motors, pid)
+        if paused:
+            last_time = time.monotonic()
+            continue
+
+        dt = now - last_time
+        last_time = now
+
+        vals, max_reflection, is_lost, last_valid_error = read_line_state(sensors, last_valid_error)
+
+        if apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
+            continue
+
+        triggered, new_until, new_dir = trigger_hard_turn_if_needed(trx, motors, vals, now)
+        if triggered:
+            turn_lock_until = new_until
+            turn_lock_direction = new_dir
+            continue
+
+        if is_lost:
+            handle_lost_line(trx, motors, last_valid_error)
+            continue
+
+        pid_drive(motors, sensors, pid, dt)
+
+
+# ================== PUBLIC ENTRYPOINT ==================
+def run_t_turns(
+    *,
+    peer_mac=bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]),
+    use_button_pin=board.D12,
+    kp=0.40, ki=0.01, kd=0.055,
+    do_calibration=True,
+):
+    """
+    Call this from another file to run the T-turn behavior.
+
+    Example:
+        from t_turns_module import run_t_turns
+        run_t_turns()
+    """
+    trx = TRX(printDebug=False, blinkDebug=False)
+    trx.addPeer(peer_mac)
+
+    log(trx, "Initializing Reactive Turn Test...")
+
+    motors = MotorDriver()
+    sensors = ReflectiveArray()
+
+    pid = PID(kp=kp, ki=ki, kd=kd)
+
+    has_button, button = setup_start_button(use_button_pin)
+
+    if do_calibration:
+        calibrate_sensors(trx, motors, sensors)
+
+    wait_for_start(trx, has_button, button)
+
+    try:
+        run_line_follower(trx, motors, sensors, pid, has_button, button)
+    except KeyboardInterrupt:
         motors.stop()
-        time.sleep(0.08)
-        # trx.sendMSG("Turn Complete")
-        print("Turn Complete")
