@@ -40,7 +40,7 @@ def apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
         return True
     return False
 
-def trigger_hard_turn_if_needed(trx, motors, vals, now):
+def trigger_hard_turn_if_needed(motors, vals, now):
     if vals[0] > CORNER_SENSITIVITY:
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
         return True, now + HARD_TURN_DURATION, -1
@@ -51,7 +51,7 @@ def trigger_hard_turn_if_needed(trx, motors, vals, now):
 
     return False, 0.0, 0
 
-def handle_lost_line(trx, motors, last_valid_error):
+def handle_lost_line(motors, last_valid_error):
     if last_valid_error < 0:
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
     else:
