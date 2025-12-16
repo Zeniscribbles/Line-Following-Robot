@@ -48,24 +48,21 @@ GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10 (White)
 # "gaps_allowed": True = If line is lost, DRIVE STRAIGHT (Blind).
 # "gaps_allowed": False = If line is lost, STOP (Safety).
 TRACK_SEQUENCE = [
-    {"name": "START/FINISH",     "action": None,                 "gaps_allowed": False},  # bottom-left bar
-
-    {"name": "STRAIGHTAWAY",     "action": None,                  "gaps_allowed": True},   # top-left bar
-
-    {"name": "T_SECTION",        "action": t_turn.run_t_turns,    "gaps_allowed": True},   # top-right bar
-
-    {"name": "FORK_GO",          "action": do_fork_action,        "gaps_allowed": False},  # mid-right bar
-
-    {"name": "TURNAROUND",       "action": None,                  "gaps_allowed": False},  # mid-left bar
-
-    {"name": "FORK_RETURN",      "action": fork_return_action,    "gaps_allowed": False},  # mid-right bar again
-
-    {"name": "T_SECTION_RETURN", "action": t_turn.run_t_turns,    "gaps_allowed": True},   # (if you truly have a bar for this; see note)
+    {"name": "START_LINE",     "action": None,                "gaps_allowed": False},
+    {"name": "SERPENTINE",     "action": None,                "gaps_allowed": False},
+    {"name": "STRAIGHTAWAY",   "action": None,                "gaps_allowed": True},   # top-left bar
+    {"name": "DO_TTURN",       "action": t_turn.run_t_turns,"gaps_allowed": False},
+    {"name": "DO_FORK",        "action": do_fork_action,      "gaps_allowed": False},
+    {"name": "FORK_RETURN",    "action": fork_return_action,  "gaps_allowed": False},
     
-    {"name": "SERP_RETURN",      "action": None,                  "gaps_allowed": False},  # top-left bar again
+    {"name": "DO_TTURN",       "action": t_turn.run_t_turns,"gaps_allowed": False},
+    {"name": "STRAIGHTAWAY",   "action": None,                "gaps_allowed": True},   # top-left bar
+    {"name": "SERPENTINE",     "action": None,                "gaps_allowed": False},
+    {"name": "END_SERP_RET",   "action": None,                "gaps_allowed": False},
+    {"name": "FORK_RETURN",    "action": fork_return_action,  "gaps_allowed": False},
 
-    {"name": "FINISH",           "action": "STOP",                "gaps_allowed": False},  # bottom-left bar again
 ]
+
 
 # -----------------------------------------------
 
