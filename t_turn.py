@@ -42,12 +42,10 @@ def apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
 
 def trigger_hard_turn_if_needed(trx, motors, vals, now):
     if vals[0] > CORNER_SENSITIVITY:
-        log(trx, ">>> Hard Left Lock!")
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
         return True, now + HARD_TURN_DURATION, -1
 
     if vals[7] > CORNER_SENSITIVITY:
-        log(trx, ">>> Hard Right Lock!")
         motors.set_speeds(TURN_SPEED, -TURN_SPEED)
         return True, now + HARD_TURN_DURATION, 1
 
@@ -55,10 +53,8 @@ def trigger_hard_turn_if_needed(trx, motors, vals, now):
 
 def handle_lost_line(trx, motors, last_valid_error):
     if last_valid_error < 0:
-        log(trx, "Lost! Spinning Left...")
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
     else:
-        log(trx, "Lost! Spinning Right...")
         motors.set_speeds(TURN_SPEED, -TURN_SPEED)
 
 def pid_drive(motors, sensors, pid, dt):
@@ -68,7 +64,7 @@ def pid_drive(motors, sensors, pid, dt):
 
 
 # ------------------ MAIN LOOP --------------------
-def run_line_follower(trx, motors, sensors, pid):
+def run_line_follower(motors, sensors, pid):
     last_valid_error = 0.0
     last_time = time.monotonic()
 
@@ -119,6 +115,6 @@ def run_t_turns(
 
 
     try:
-        run_line_follower(trx, motors, sensors, pid)
+        run_line_follower(motors, sensors, pid)
     except KeyboardInterrupt:
         motors.stop()
