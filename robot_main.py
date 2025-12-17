@@ -30,6 +30,11 @@ def fork_return_action(motors, sensors, **kwargs):
     trx.sendMSG(f">> ACTION: Return from {LAST_FORK_CHOICE}")
     fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
 
+    trx.sendMSG(">> ACTION: Executing 180 Turn...")
+    fork.turn_180(motors, sensors)
+
+
+
 # ---------------- CONFIGURATION ----------------
 # --- TUNING -------
 KP = 0.75
@@ -49,7 +54,7 @@ START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 # 2. SENSOR THRESHOLDS
 # (Adjusted slightly lower to be safer, based on your previous issues)
 BAR_THRESH = 0.60         # Black > 0.60
-BAR_COUNT_THRESH = 8      # Bar = 4+ sensors black
+BAR_COUNT_THRESH = 6      # Bar = 4+ sensors black
 GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 
 # --- MOTOR TRIM (Fixes Drifting) ---
