@@ -76,39 +76,40 @@ def run_line_follower(motors, sensors, pid):
     turn_lock_until = 0.0
     turn_lock_direction = 0  # -1 left, +1 right
 
-while True:
-        now = time.monotonic()
 
-        dt = now - last_time
-        last_time = now
+    while True:
+            now = time.monotonic()
 
-        # 1. Read Sensors
-        vals, max_reflection, is_lost, last_valid_error = read_line_state(sensors, last_valid_error)
+            dt = now - last_time
+            last_time = now
 
-        # 2. EXIT CONDITION: Check for next state trigger
-        if is_black_bar(vals):
-            print(">>> T-TURN COMPLETE: Bar detected. Returning to Main.")
-            motors.stop()
-            return # Breaks the loop and returns control to robot_main
+            # 1. Read Sensors
+            vals, max_reflection, is_lost, last_valid_error = read_line_state(sensors, last_valid_error)
 
-        # 3. Turn Lock
-        if apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
-            continue
+            # 2. EXIT CONDITION: Check for next state trigger
+            if is_black_bar(vals):
+                print(">>> T-TURN COMPLETE: Bar detected. Returning to Main.")
+                motors.stop()
+                return # Breaks the loop and returns control to robot_main
 
-        # 4. Check for Intersections
-        triggered, new_until, new_dir = trigger_hard_turn_if_needed(motors, vals, now)
-        if triggered:
-            turn_lock_until = new_until
-            turn_lock_direction = new_dir
-            continue
+            # 3. Turn Lock
+            if apply_turn_lock(motors, now, turn_lock_until, turn_lock_direction):
+                continue
 
-        # 5. Lost Line Logic
-        if is_lost:
-            handle_lost_line(motors, last_valid_error)
-            continue
+            # 4. Check for Intersections
+            triggered, new_until, new_dir = trigger_hard_turn_if_needed(motors, vals, now)
+            if triggered:
+                turn_lock_until = new_until
+                turn_lock_direction = new_dir
+                continue
 
-        # 6. Standard PID
-        pid_drive(motors, sensors, pid, dt)
+            # 5. Lost Line Logic
+            if is_lost:
+                handle_lost_line(motors, last_valid_error)
+                continue
+
+            # 6. Standard PID
+            pid_drive(motors, sensors, pid, dt)
 
 # ================== PUBLIC ENTRYPOINT ==================
 def run_t_turns(motors, sensors, **kwargs):
@@ -119,7 +120,7 @@ def run_t_turns(motors, sensors, **kwargs):
     kp = kwargs.get('kp', 0.40)
     ki = kwargs.get('ki', 0.01)
     kd = kwargs.get('kd', 0.055)
-    
+
     # Create a local PID instance (safe to do)
     pid = PID(kp=kp, ki=ki, kd=kd)
 
