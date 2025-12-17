@@ -52,6 +52,12 @@ BAR_THRESH = 0.60         # Black > 0.60
 BAR_COUNT_THRESH = 8      # Bar = 4+ sensors black
 GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 
+# --- MOTOR TRIM (Fixes Drifting) ---
+# If robot curves LEFT:  Reduce RIGHT_TRIM (e.g. 0.90)
+# If robot curves RIGHT: Reduce LEFT_TRIM  (e.g. 0.90)
+LEFT_TRIM = 1.0
+RIGHT_TRIM = 0.9
+
 # 3. TRACK SEQUENCE
 TRACK_SEQUENCE = [
     # {"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
@@ -97,7 +103,7 @@ def run_robot():
         HAS_BUTTON = False
 
     # ==========================================================
-    # ROBUST CALIBRATION LOOP
+    # CALIBRATION LOOP
     # ==========================================================
     trx.sendMSG(">>> RESET")
 
@@ -118,9 +124,13 @@ def run_robot():
 
         trx.sendMSG("Spinning...")
         
-        # --- FIX: USE RAW MODE FOR CALIBRATION SPIN ---
-        # Using PID here causes jerking because of 0 RPM starts/stops
-        motors.set_speeds_direct(0.25, -0.25) 
+        motors.set_speeds(0.25, -0.25)
+        start_cal = time.monotonic()
+        while time.monotonic() - start_cal < 2.0:
+            sensors.read_calibrated()
+        motors.stop()
+
+        trx.sendMSG("--- CALIBRATION DONE ---")
         # ----------------------------------------------
         
         start_cal = time.monotonic()
@@ -277,13 +287,14 @@ def run_robot():
             # 6. Drive Logic
             if is_line_lost(vals):
                 if gaps_allowed:
-                    # Drive Blind
-                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                    # Drive Blind WITH TRIM
+                    motors.set_speeds(BASE_SPEED * LEFT_TRIM, BASE_SPEED * RIGHT_TRIM)
                 else:
                     # Stop
                     motors.set_speeds(0, 0)
                 time.sleep(0.001)
                 continue
+
 
             # Normal PID
             err = sensors.get_line_error()
