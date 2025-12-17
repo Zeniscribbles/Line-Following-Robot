@@ -33,8 +33,6 @@ def fork_return_action(motors, sensors, **kwargs):
     trx.sendMSG(">> ACTION: Executing 180 Turn...")
     fork.turn_180(motors, sensors)
 
-
-
 # ---------------- CONFIGURATION ----------------
 # --- TUNING -------
 KP = 0.75
