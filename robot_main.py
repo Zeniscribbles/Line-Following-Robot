@@ -116,44 +116,25 @@ def run_robot():
             time.sleep(2)
 
         trx.sendMSG("Spinning...")
-        motors.set_speeds(0.25, -0.25)
+        
+        # --- FIX: USE RAW MODE FOR CALIBRATION SPIN ---
+        # Using PID here causes jerking because of 0 RPM starts/stops
+        motors.set_speeds_direct(0.25, -0.25) 
+        # ----------------------------------------------
+        
         start_cal = time.monotonic()
-        while time.monotonic() - start_cal < 2.5: # Increased to 2.5s to ensure crossing
+        while time.monotonic() - start_cal < 2.5: 
             sensors.read_calibrated()
         motors.stop()
 
         # VALIDATE CALIBRATION
-        # We check the raw range inside the sensor object (if accessible) 
-        # OR we just check a read now.
         test_read = sensors.read_calibrated()
         max_test = max(test_read)
         
         trx.sendMSG(f"DEBUG: Calibration Peak: {max_test:.2f}")
 
-        # If max_test is low (< 0.5), it means we never saw black. 
-        # However, read_calibrated() scales to 0-1 based on what it saw.
-        # A better check is often implicit: if we barely saw contrast, 
-        # the sensor values will be jittery or the 'raw' values (if exposed) are low.
-        
-        # Since we can't see 'raw' here easily without changing the class,
-        # we assume that if the user followed instructions, it's okay.
-        # BUT, looking at your logs, 0.16 suggests the library MIGHT not be auto-scaling 
-        # perfectly or it is scaling and the floor is just noisy.
-        
-        # LOGIC CHECK:
-        # If the sensor library scales 0..1, then max_test should always be ~1.0 
-        # if it's on black. If it's on white, it should be ~0.0.
-        # Let's ask the user to confirm visual alignment.
-        
         if max_test < 0.5:
-             # This means even after calibration, the sensor currently clearly sees WHITE.
-             # This is actually GOOD. It means we are likely on the line.
              pass
-        
-        # CRITICAL CHECK: 
-        # If your library exposes min/max, we should check the delta.
-        # Since I can't see inside 'ReflectiveArray' right now, 
-        # we will trust the spin IF you confirm the robot crossed the line.
         
         trx.sendMSG("Calibration Complete.")
         trx.sendMSG("Did the robot cross the black line? (If no, Reset)")
