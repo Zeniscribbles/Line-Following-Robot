@@ -44,7 +44,7 @@ BAR_HITS_REQUIRED = 3
 BAR_CLEAR_TIME = 0.6
 
 # --- DRIVE TIMES ---
-BAR_CLEAR_TIME = 0.6    # Standard time to clear T-Turn/Fork bars
+BAR_CLEAR_TIME = 0.2    # Standard time to clear T-Turn/Fork bars
 START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 
 # 2. SENSOR THRESHOLDS
@@ -55,7 +55,7 @@ GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 
 # 3. TRACK SEQUENCE
 TRACK_SEQUENCE = [
-    {"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
+    #{"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
     {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},
     {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},   
     {"name": "DO_TTURN",       "action": t_turn.run_t_turns,   "gaps_allowed": False},
