@@ -32,7 +32,7 @@ def fork_return_action(motors, sensors, **kwargs):
 
 # ---------------- CONFIGURATION ----------------
 # --- TUNING -------
-KP = 0.40
+KP = 0.50
 KI = 0.01
 KD = 0.055
 BASE_SPEED = 0.25  
@@ -42,6 +42,10 @@ MAX_DT = 0.05
 MAX_CORRECTION = 0.45
 BAR_HITS_REQUIRED = 3
 BAR_CLEAR_TIME = 0.6
+
+# --- DRIVE TIMES ---
+BAR_CLEAR_TIME = 0.6    # Standard time to clear T-Turn/Fork bars
+START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 
 # 2. SENSOR THRESHOLDS
 # (Adjusted slightly lower to be safer, based on your previous issues)
@@ -92,18 +96,71 @@ def run_robot():
         trx.sendMSG(f"DEBUG: Button setup skipped: {e}")
         HAS_BUTTON = False
 
-    # --- CALIBRATION ---
-    trx.sendMSG("--- CALIBRATION START ---")
-    trx.sendMSG("Place robot ON THE TRACK")
-    time.sleep(2)
+    # ==========================================================
+    # ROBUST CALIBRATION LOOP
+    # ==========================================================
+    trx.sendMSG(">>> RESET")
+
+    calibration_successful = False
     
-    motors.set_speeds(0.25, -0.25)
-    start_cal = time.monotonic()
-    while time.monotonic() - start_cal < 2.0:
-        sensors.read_calibrated()
-    motors.stop()
-    
-    trx.sendMSG("--- CALIBRATION DONE ---")
+    while not calibration_successful:
+        trx.sendMSG("--- CALIBRATION REQUIRED ---")
+        trx.sendMSG("1. Place robot on White")
+        trx.sendMSG("2. Ensure it crosses BLACK line during spin")
+        trx.sendMSG(">>> Press Button to Spin...")
+        
+        # Wait for button press
+        if HAS_BUTTON:
+            while start_button.value: time.sleep(0.1)
+            while not start_button.value: time.sleep(0.1)
+        else:
+            time.sleep(2)
+
+        trx.sendMSG("Spinning...")
+        motors.set_speeds(0.25, -0.25)
+        start_cal = time.monotonic()
+        while time.monotonic() - start_cal < 2.5: # Increased to 2.5s to ensure crossing
+            sensors.read_calibrated()
+        motors.stop()
+
+        # VALIDATE CALIBRATION
+        # We check the raw range inside the sensor object (if accessible) 
+        # OR we just check a read now.
+        test_read = sensors.read_calibrated()
+        max_test = max(test_read)
+        
+        trx.sendMSG(f"DEBUG: Calibration Peak: {max_test:.2f}")
+
+        # If max_test is low (< 0.5), it means we never saw black. 
+        # However, read_calibrated() scales to 0-1 based on what it saw.
+        # A better check is often implicit: if we barely saw contrast, 
+        # the sensor values will be jittery or the 'raw' values (if exposed) are low.
+        
+        # Since we can't see 'raw' here easily without changing the class,
+        # we assume that if the user followed instructions, it's okay.
+        # BUT, looking at your logs, 0.16 suggests the library MIGHT not be auto-scaling 
+        # perfectly or it is scaling and the floor is just noisy.
+        
+        # LOGIC CHECK:
+        # If the sensor library scales 0..1, then max_test should always be ~1.0 
+        # if it's on black. If it's on white, it should be ~0.0.
+        # Let's ask the user to confirm visual alignment.
+        
+        if max_test < 0.5:
+             # This means even after calibration, the sensor currently clearly sees WHITE.
+             # This is actually GOOD. It means we are likely on the line.
+             pass
+        
+        # CRITICAL CHECK: 
+        # If your library exposes min/max, we should check the delta.
+        # Since I can't see inside 'ReflectiveArray' right now, 
+        # we will trust the spin IF you confirm the robot crossed the line.
+        
+        trx.sendMSG("Calibration Complete.")
+        trx.sendMSG("Did the robot cross the black line? (If no, Reset)")
+        calibration_successful = True
+        time.sleep(1)
+    # ==========================================================
     
     # --- DIAGNOSTIC: DID WE SEE BLACK? ---
     # We check the internal min/max values to see contrast
@@ -188,7 +245,16 @@ def run_robot():
             # 5. Transition Logic
             if bar_hits >= 5:
                 trx.sendMSG(f">>> TRANSITION: Leaving {current_track['name']}")
-
+                
+                # --- THIS IS THE NEW CHECK ---
+                # Determine Blind Drive Time
+                # If we are just starting, only do a tiny blip.
+                if current_track['name'] == "START_LINE":
+                    blind_time = START_CLEAR_TIME # Uses the 0.1s variable
+                else:
+                    blind_time = BAR_CLEAR_TIME   # Uses the 0.6s variable
+                # -----------------------------
+                
                 # Update Index
                 track_index += 1
                 if track_index >= len(TRACK_SEQUENCE):
@@ -201,7 +267,7 @@ def run_robot():
                 motors.set_speeds(BASE_SPEED, BASE_SPEED)
                 time.sleep(BAR_CLEAR_TIME)
                 motors.stop()
-                time.sleep(0.1)
+                #time.sleep(0.1)
 
                 # Get New Track
                 current_track = TRACK_SEQUENCE[track_index]

@@ -9,7 +9,7 @@ from PID import PID
 
 # ================= CONFIGURATION =================
 TURN_SPEED          = 0.4
-BASE_SPEED          = 0.35
+BASE_SPEED          = 0.20
 CORNER_SENSITIVITY  = 0.8
 ALL_WHITE_THRESHOLD = 0.2
 MEMORY_THRESHOLD    = 0.5
