@@ -32,19 +32,18 @@ def fork_return_action(motors, sensors, **kwargs):
 
 # ---------------- CONFIGURATION ----------------
 # --- TUNING -------
-KP = 0.50
+KP = 0.75
 KI = 0.01
-KD = 0.055
-BASE_SPEED = 0.25  
+KD = 0.07
+BASE_SPEED = 0.15
 
 # 1. TIMING & SENSITIVITY
 MAX_DT = 0.05
 MAX_CORRECTION = 0.45
 BAR_HITS_REQUIRED = 3
-BAR_CLEAR_TIME = 0.6
 
 # --- DRIVE TIMES ---
-BAR_CLEAR_TIME = 0.2    # Standard time to clear T-Turn/Fork bars
+BAR_CLEAR_TIME = 0.6    # Standard time to clear T-Turn/Fork bars
 START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 
 # 2. SENSOR THRESHOLDS
@@ -55,7 +54,7 @@ GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 
 # 3. TRACK SEQUENCE
 TRACK_SEQUENCE = [
-    #{"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
+    # {"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
     {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},
     {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},   
     {"name": "DO_TTURN",       "action": t_turn.run_t_turns,   "gaps_allowed": False},
@@ -217,7 +216,7 @@ def run_robot():
 
             # 3. Read Sensors
             vals = sensors.read_calibrated()
-
+            
             # 4. Bar Logic (Leaky Bucket)
             if current_frame_is_bar(vals):
                 bar_hits += 1
@@ -263,9 +262,11 @@ def run_robot():
                     break
 
                 # Clear Bar
-                trx.sendMSG("   -> Clearing Bar (Blind Drive)...")
+                trx.sendMSG(f"   -> Clearing Bar ({blind_time}s)...")
                 motors.set_speeds(BASE_SPEED, BASE_SPEED)
-                time.sleep(BAR_CLEAR_TIME)
+
+                time.sleep(blind_time)
+
                 motors.stop()
                 #time.sleep(0.1)
 
