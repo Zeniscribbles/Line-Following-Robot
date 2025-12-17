@@ -55,7 +55,7 @@ GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 # --- MOTOR TRIM (Fixes Drifting) ---
 # If robot curves LEFT:  Reduce RIGHT_TRIM (e.g. 0.90)
 # If robot curves RIGHT: Reduce LEFT_TRIM  (e.g. 0.90)
-LEFT_TRIM = 1.0
+LEFT_TRIM = 1.1
 RIGHT_TRIM = 0.9
 
 # 3. TRACK SEQUENCE
@@ -289,11 +289,13 @@ def run_robot():
                 if gaps_allowed:
                     # Drive Blind WITH TRIM
                     motors.set_speeds(BASE_SPEED * LEFT_TRIM, BASE_SPEED * RIGHT_TRIM)
+                '''
                 else:
                     # Stop
                     motors.set_speeds(0, 0)
                 time.sleep(0.001)
                 continue
+                '''
 
 
             # Normal PID
