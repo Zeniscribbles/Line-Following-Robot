@@ -49,7 +49,7 @@ START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 # 2. SENSOR THRESHOLDS
 # (Adjusted slightly lower to be safer, based on your previous issues)
 BAR_THRESH = 0.60         # Black > 0.60
-BAR_COUNT_THRESH = 4      # Bar = 4+ sensors black
+BAR_COUNT_THRESH = 8      # Bar = 4+ sensors black
 GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
 
 # 3. TRACK SEQUENCE
@@ -61,6 +61,7 @@ TRACK_SEQUENCE = [
     {"name": "DO_FORK",        "action": do_fork_action,       "gaps_allowed": False},
     {"name": "FORK_RETURN",    "action": fork_return_action,   "gaps_allowed": False},
     
+    {"name": "DO_FORK",        "action": do_fork_action,       "gaps_allowed": False},
     {"name": "DO_TTURN",       "action": t_turn.run_t_turns,   "gaps_allowed": False},
     {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},   
     {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},

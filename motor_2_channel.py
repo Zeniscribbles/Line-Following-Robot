@@ -1,180 +1,311 @@
 import time
 import board
 import digitalio
-import pwmio
-from PID import PID  # <--- IMPORT YOUR PID CLASS
+from motor_2_channel import MotorDriver
+from reflective_array_subsystem import ReflectiveArray
+from PID import PID
+import esp32_trx as trx
 
-try:
-    import countio
-    _HAS_COUNTIO = True
-except ImportError:
-    _HAS_COUNTIO = False
+# Import maneuvers
+import fork
+import t_turn
 
+# ---------------- WRAPPERS ----------------
+def do_fork_action(motors, sensors, **kwargs):
+    """Aligns, chooses a path, executes it, and saves the choice."""
+    global LAST_FORK_CHOICE
+    # DEBUG
+    trx.sendMSG(">> ACTION: Executing Fork...")
+    fork.standard_align(motors, sensors)
+    LAST_FORK_CHOICE = fork.execute_random_fork(motors)
+    trx.sendMSG(f">> ACTION RESULT: Chose {LAST_FORK_CHOICE}")
 
-# ======================= SIMPLE ENCODER CLASS ========================
-class SimpleEncoder:
-    def __init__(self, side, counts_per_rev=12, timeout=0.5):
-        self.side = side
-        self.cpr = counts_per_rev
-        self.timeout = timeout
+def fork_return_action(motors, sensors, **kwargs):
+    """Uses the saved choice to align correctly and cross the bar."""
+    global LAST_FORK_CHOICE
+    if LAST_FORK_CHOICE is None:
+        trx.sendMSG("WARNING: No choice saved. Defaulting to CENTER.")
+        LAST_FORK_CHOICE = 'CENTER'
 
-        # --- PINS DEFINED HERE ---
-        if side == 'left':
-            self._pin_id = board.D1
-        elif side == 'right':
-            self._pin_id = board.D0
+    trx.sendMSG(f">> ACTION: Return from {LAST_FORK_CHOICE}")
+    fork.force_align_and_cross(motors, sensors, LAST_FORK_CHOICE)
+
+# ---------------- CONFIGURATION ----------------
+# --- TUNING -------
+KP = 0.75
+KI = 0.01
+KD = 0.07
+BASE_SPEED = 0.15
+
+# 1. TIMING & SENSITIVITY
+MAX_DT = 0.05
+MAX_CORRECTION = 0.45
+BAR_HITS_REQUIRED = 3
+
+# --- DRIVE TIMES ---
+BAR_CLEAR_TIME = 0.6    # Standard time to clear T-Turn/Fork bars
+START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
+
+# 2. SENSOR THRESHOLDS
+# (Adjusted slightly lower to be safer, based on your previous issues)
+BAR_THRESH = 0.60         # Black > 0.60
+BAR_COUNT_THRESH = 8      # Bar = 4+ sensors black
+GAP_THRESH = 0.10         # Line Lost = All sensors < 0.10
+
+# --- MOTOR TRIM (Fixes Drifting) ---
+# If robot curves LEFT:  Reduce RIGHT_TRIM (e.g. 0.90)
+# If robot curves RIGHT: Reduce LEFT_TRIM  (e.g. 0.90)
+LEFT_TRIM = 1.0
+RIGHT_TRIM = 1.0
+
+# 3. TRACK SEQUENCE
+TRACK_SEQUENCE = [
+    # {"name": "START_LINE",     "action": None,                 "gaps_allowed": False},
+    {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},
+    {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},   
+    {"name": "DO_TTURN",       "action": t_turn.run_t_turns,   "gaps_allowed": False},
+    {"name": "DO_FORK",        "action": do_fork_action,       "gaps_allowed": False},
+    {"name": "FORK_RETURN",    "action": fork_return_action,   "gaps_allowed": False},
+    
+    {"name": "DO_FORK",        "action": do_fork_action,       "gaps_allowed": False},
+    {"name": "DO_TTURN",       "action": t_turn.run_t_turns,   "gaps_allowed": False},
+    {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},   
+    {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},
+    {"name": "END_SERP_RET",   "action": None,                 "gaps_allowed": False},
+    {"name": "FORK_RETURN",    "action": fork_return_action,   "gaps_allowed": False},
+]
+
+# -----------------------------------------------
+
+trx.setDebug(printDebug=True, blinkDebug=True) # Set printDebug=True so you see it in Mu
+trx.addPeer(bytes([0xec, 0xda, 0x3b, 0x61, 0x58, 0x58]))
+
+def current_frame_is_bar(vals):
+    black_count = sum(1 for v in vals if v > BAR_THRESH)
+    return black_count >= BAR_COUNT_THRESH
+
+def is_line_lost(vals):
+    return max(vals) < GAP_THRESH
+
+def run_robot():
+    # --- HARDWARE SETUP ---
+    motors = MotorDriver()
+    sensors = ReflectiveArray()
+
+    try:
+        start_button = digitalio.DigitalInOut(board.D12)
+        start_button.direction = digitalio.Direction.INPUT
+        start_button.pull = digitalio.Pull.UP
+        HAS_BUTTON = True
+        trx.sendMSG("DEBUG: Button initialized on D12")
+    except Exception as e:
+        trx.sendMSG(f"DEBUG: Button setup skipped: {e}")
+        HAS_BUTTON = False
+
+    # ==========================================================
+    # ROBUST CALIBRATION LOOP
+    # ==========================================================
+    trx.sendMSG(">>> RESET")
+
+    calibration_successful = False
+    
+    while not calibration_successful:
+        trx.sendMSG("--- CALIBRATION REQUIRED ---")
+        trx.sendMSG("1. Place robot on White")
+        trx.sendMSG("2. Ensure it crosses BLACK line during spin")
+        trx.sendMSG(">>> Press Button to Spin...")
+        
+        # Wait for button press
+        if HAS_BUTTON:
+            while start_button.value: time.sleep(0.1)
+            while not start_button.value: time.sleep(0.1)
         else:
-            raise ValueError("Side must be 'left' or 'right'")
+            time.sleep(2)
 
-        self.last_time = time.monotonic()
-        self.current_rpm = 0.0
-
-        # Prefer countio if available
-        self._counter = None
-        self._last_count = 0
-
-        if _HAS_COUNTIO:
-            self._counter = countio.Counter(self._pin_id, edge=countio.Edge.RISE)
-            self._last_count = self._counter.count
-        else:
-            self.pin = digitalio.DigitalInOut(self._pin_id)
-            self.pin.direction = digitalio.Direction.INPUT
-            self.last_state = self.pin.value
-            self.count = 0
-
-    def read_rpm(self):
-        now = time.monotonic()
-        dt = now - self.last_time
-
-        if self._counter is not None:
-            # countio path
-            c = self._counter.count
-            delta = c - self._last_count
-            self._last_count = c
-
-            if delta > 0:
-                revs = delta / self.cpr
-                self.current_rpm = (revs / dt) * 60.0
-                self.last_time = now
-            elif dt > self.timeout:
-                self.current_rpm = 0.0
-
-            return self.current_rpm
-
-        # Polling fallback path
-        val = self.pin.value
-        if val and not self.last_state:
-            self.count += 1
-        self.last_state = val
-
-        if self.count > 0:
-            revs = self.count / self.cpr
-            self.current_rpm = (revs / dt) * 60.0
-            self.count = 0
-            self.last_time = now
-        elif dt > self.timeout:
-            self.current_rpm = 0.0
-
-        return self.current_rpm
-
-
-# ========================== MOTOR DRIVER CLASS ==============================
-class MotorDriver:
-    def __init__(self):
-        # --- MOTOR PINS ---
-        # Left Motor
-        self.dir_l = digitalio.DigitalInOut(board.A4)
-        self.dir_l.direction = digitalio.Direction.OUTPUT
-        self.pwm_l = pwmio.PWMOut(board.A6, frequency=20000, duty_cycle=0)
-
-        # Right Motor
-        self.dir_r = digitalio.DigitalInOut(board.A5)
-        self.dir_r.direction = digitalio.Direction.OUTPUT
-        self.pwm_r = pwmio.PWMOut(board.A7, frequency=20000, duty_cycle=0)
-
-        # Sleep Pin
-        self.slp = digitalio.DigitalInOut(board.A3)
-        self.slp.direction = digitalio.Direction.OUTPUT
-        self.slp.value = True # Enable driver
-
-        # Create Encoders
-        self.enc_l = SimpleEncoder(side='left')
-        self.enc_r = SimpleEncoder(side='right')
-
-        # --- RPM CONTROL CONFIGURATION ---
-        # This is the RPM the robot travels at when speed is 1.0
-        # If your robot is jerky, try lowering this. If it's too slow, raise it.
-        self.MAX_RPM = 200.0 
+        trx.sendMSG("Spinning...")
         
-        # PID Constants for RPM
-        # These are different from Line Following!
-        # kp=0.003 means for every 1 RPM error, we add 0.003 to the duty cycle.
-        kp_rpm = 0.003 
-        ki_rpm = 0.005
-        kd_rpm = 0.0001
+        # --- FIX: USE RAW MODE FOR CALIBRATION SPIN ---
+        # Using PID here causes jerking because of 0 RPM starts/stops
+        motors.set_speeds_direct(0.25, -0.25) 
+        # ----------------------------------------------
         
-        self.pid_l = PID(kp_rpm, ki_rpm, kd_rpm, integral_limit=0.3)
-        self.pid_r = PID(kp_rpm, ki_rpm, kd_rpm, integral_limit=0.3)
+        start_cal = time.monotonic()
+        while time.monotonic() - start_cal < 2.5: 
+            sensors.read_calibrated()
+        motors.stop()
+
+        # VALIDATE CALIBRATION
+        test_read = sensors.read_calibrated()
+        max_test = max(test_read)
         
-        self.last_loop_time = time.monotonic()
+        trx.sendMSG(f"DEBUG: Calibration Peak: {max_test:.2f}")
 
-    def set_raw_duty(self, motor_char, duty):
-        """
-        Directly controls the hardware PWM. 
-        Previously called 'set_speed', renamed to avoid confusion.
-        """
-        duty = max(-1.0, min(1.0, duty))
-        speed_int = int(abs(duty) * 65535)
-        is_forward = duty >= 0
-
-        motor_char = motor_char.upper()
-        if motor_char == 'L':
-            self.dir_l.value = not is_forward
-            self.pwm_l.duty_cycle = speed_int
-        elif motor_char == 'R':
-            self.dir_r.value = not is_forward
-            self.pwm_r.duty_cycle = speed_int
-
-    def set_speeds(self, left_input, right_input):
-        """
-        Uses PID to match the actual RPM to the requested input.
-        left_input, right_input: -1.0 to 1.0 (fraction of MAX_RPM)
-        """
-        # 1. Measure Time Step (dt)
-        now = time.monotonic()
-        dt = now - self.last_loop_time
-        self.last_loop_time = now
-        if dt <= 0: dt = 0.001
-
-        # 2. Determine Target RPM
-        target_l = left_input * self.MAX_RPM
-        target_r = right_input * self.MAX_RPM
-
-        # 3. Read Actual RPM
-        # Encoders always return positive numbers, so we apply the sign 
-        # based on what we are *trying* to do to keep math consistent.
-        raw_rpm_l = self.enc_l.read_rpm()
-        raw_rpm_r = self.enc_r.read_rpm()
+        if max_test < 0.5:
+             pass
         
-        current_l = raw_rpm_l if left_input >= 0 else -raw_rpm_l
-        current_r = raw_rpm_r if right_input >= 0 else -raw_rpm_r
+        trx.sendMSG("Calibration Complete.")
+        trx.sendMSG("Did the robot cross the black line? (If no, Reset)")
+        calibration_successful = True
+        time.sleep(1)
+    # ==========================================================
+    
+    # --- DIAGNOSTIC: DID WE SEE BLACK? ---
+    # We check the internal min/max values to see contrast
+    # (Assuming ReflectiveArray has public min_vals/max_vals, if not we check a read)
+    test_read = sensors.read_calibrated()
+    max_test = max(test_read)
+    trx.sendMSG(f"DEBUG: Peak Black Level Seen: {max_test:.2f}")
+    if max_test < 0.5:
+        trx.sendMSG("CRITICAL WARNING: Sensors barely see black! Check wiring/height.")
+        trx.sendMSG("Check: 1. Sensor Height (too high?)")
+        trx.sendMSG("       2. Connector loose?")
+        trx.sendMSG("       3. Did robot spin over the black line?")
+    else:
+        trx.sendMSG("DEBUG: Sensors look healthy.")
 
-        # 4. Calculate PID Correction
-        # Feedforward: We guess the duty cycle (input) to start quickly
-        # Output = Feedforward + PID_Correction
-        pid_out_l = self.pid_l.update(target_l, current_l, dt)
-        pid_out_r = self.pid_r.update(target_r, current_r, dt)
+    # --- WAIT FOR START ---
+    if HAS_BUTTON:
+        trx.sendMSG(">>> Press Button to Start... <<<")
+        while start_button.value: time.sleep(0.1)
+        while not start_button.value: time.sleep(0.1)
+    else:
+        trx.sendMSG("No button. Starting in 2s...")
+        time.sleep(2)
 
-        final_duty_l = left_input + pid_out_l
-        final_duty_r = right_input + pid_out_r
+    # --- INITIALIZE STATE ---
+    pid = PID(kp=KP, ki=KI, kd=KD)
+    track_index = 0
+    bar_hits = 0
+    
+    current_track = TRACK_SEQUENCE[track_index]
+    gaps_allowed = current_track["gaps_allowed"]
+    
+    last_time = time.monotonic()
+    
+    # TIMER FOR DEBUG PRINTS (Prevents freezing)
+    last_debug_time = time.monotonic()
 
-        # 5. Apply to Hardware
-        self.set_raw_duty('L', final_duty_l)
-        self.set_raw_duty('R', final_duty_r)
+    trx.sendMSG(f"STARTING EVENT: {current_track['name']}")
 
-    def stop(self):
-        self.set_raw_duty('L', 0)
-        self.set_raw_duty('R', 0)
-        # Reset PID internals so they don't "wind up" while stopped
-        self.pid_l.reset()
-        self.pid_r.reset()
+    try:
+        while True:
+            # 1. Killswitch
+            if HAS_BUTTON and not start_button.value:
+                motors.stop()
+                trx.sendMSG(">>> STOP BUTTON PRESSED")
+                while not start_button.value: time.sleep(0.1)
+                break
+
+            # 2. Timing
+            now = time.monotonic()
+            dt = now - last_time
+            last_time = now
+            if dt > MAX_DT: dt = MAX_DT
+
+            # 3. Read Sensors
+            vals = sensors.read_calibrated()
+            
+            # 4. Bar Logic (Leaky Bucket)
+            if current_frame_is_bar(vals):
+                bar_hits += 1
+            else:
+                bar_hits -= 1
+                if bar_hits < 0: bar_hits = 0
+
+            # ==========================================================
+            # SAFE DEBUGGING (Runs 2 times per second)
+            # ==========================================================
+            if now - last_debug_time > 0.5:
+                # Calculate what the PID is trying to do
+                debug_err = sensors.get_line_error()
+                debug_max = max(vals)
+                
+                # Convert vals to 0-100 ints for easier reading
+                # e.g., [5, 10, 99, 10, 5] means center sensor is on black
+                vals_int = [int(v * 100) for v in vals]
+                
+                msg = f"[{current_track['name'][:4]}] Hits:{bar_hits} | Max:{debug_max:.2f} | Err:{debug_err:.2f}"
+                trx.sendMSG(msg)
+                last_debug_time = now
+            # ==========================================================
+
+            # 5. Transition Logic
+            if bar_hits >= 5:
+                trx.sendMSG(f">>> TRANSITION: Leaving {current_track['name']}")
+                
+                # --- THIS IS THE NEW CHECK ---
+                # Determine Blind Drive Time
+                # If we are just starting, only do a tiny blip.
+                if current_track['name'] == "START_LINE":
+                    blind_time = START_CLEAR_TIME # Uses the 0.1s variable
+                else:
+                    blind_time = BAR_CLEAR_TIME   # Uses the 0.6s variable
+                # -----------------------------
+                
+                # Update Index
+                track_index += 1
+                if track_index >= len(TRACK_SEQUENCE):
+                    trx.sendMSG(">>> SEQUENCE COMPLETE! Stopping.")
+                    motors.stop()
+                    break
+
+                # Clear Bar
+                trx.sendMSG(f"   -> Clearing Bar ({blind_time}s)...")
+                motors.set_speeds(BASE_SPEED, BASE_SPEED)
+
+                time.sleep(blind_time)
+
+                motors.stop()
+                #time.sleep(0.1)
+
+                # Get New Track
+                current_track = TRACK_SEQUENCE[track_index]
+                gaps_allowed = current_track["gaps_allowed"]
+                trx.sendMSG(f">>> ENTERING: {current_track['name']}")
+
+                # Execute Action
+                if current_track["action"] is not None:
+                    trx.sendMSG(f"   -> Running Action: {current_track['name']}")
+                    current_track["action"](motors, sensors)
+                    
+                    # Reset PID after action
+                    pid.reset()
+                    bar_hits = 0
+                    last_time = time.monotonic()
+                    continue
+
+                # No Action (Reset and continue)
+                pid.reset()
+                bar_hits = 0
+                last_time = time.monotonic()
+                continue
+
+            # 6. Drive Logic
+            if is_line_lost(vals):
+                if gaps_allowed:
+                    # Drive Blind WITH TRIM
+                    motors.set_speeds(BASE_SPEED * LEFT_TRIM, BASE_SPEED * RIGHT_TRIM)
+                else:
+                    # Stop
+                    motors.set_speeds(0, 0)
+                time.sleep(0.001)
+                continue
+
+            # Normal PID
+            err = sensors.get_line_error()
+            correction = pid.update(0.0, err, dt)
+
+            if correction > MAX_CORRECTION: correction = MAX_CORRECTION
+            if correction < -MAX_CORRECTION: correction = -MAX_CORRECTION
+
+            motors.set_speeds(BASE_SPEED - correction, BASE_SPEED + correction)
+            time.sleep(0.001)
+
+    except KeyboardInterrupt:
+        motors.stop()
+        trx.sendMSG("Ctrl+C Stop")
+    finally:
+        motors.stop()
+
+if __name__ == "__main__":
+    run_robot()
