@@ -11,7 +11,6 @@ except ImportError:
 
 
 # ======================= SIMPLE ENCODER CLASS ========================
-
 class SimpleEncoder:
     def __init__(self, side, counts_per_rev=12, timeout=0.5):
         self.side = side
