@@ -2,18 +2,6 @@ import time
 import board
 import digitalio
 import random
-from motor_2_channel import MotorDriver
-from reflective_array_subsystem import ReflectiveArray
-from PID import PID
-
-# ================= SETUP =================
-try:
-    start_button = digitalio.DigitalInOut(board.D12)
-    start_button.direction = digitalio.Direction.INPUT
-    start_button.pull = digitalio.Pull.UP
-    HAS_BUTTON = True
-except:
-    HAS_BUTTON = False
 
 # ================= HELPER FUNCTIONS =================
 
@@ -30,12 +18,12 @@ def force_align_and_cross(motors, sensors, came_from):
     # If we came from LEFT, we force LEFT to ensure we aren't angled into the mess.
     if came_from == 'LEFT':
         print("Forcing Left Alignment...")
-        motors.set_speeds(-0.3, 0.3) # Spin Left
-        time.sleep(0.25) # Short blind pivot
+        motors.set_speeds(0.0, 0.40)  # Spin Left
+        time.sleep(0.15)  # Short blind pivot
     elif came_from == 'RIGHT':
         print("Forcing Right Alignment...")
-        motors.set_speeds(0.3, -0.3) # Spin Right
-        time.sleep(0.25)
+        motors.set_speeds(0.40, 0.0)  # Spin Right
+        time.sleep(0.15)
     
     motors.stop()
     time.sleep(0.1)
@@ -52,11 +40,11 @@ def force_align_and_cross(motors, sensors, came_from):
 
     # 3. Jolt Forward until WHITE (Clear the bar)
     print("Jolting forward to clear bar...")
-    motors.set_speeds(0.35, 0.35)
+    motors.set_speeds(0.25, 0.25)
     
     # Safety timeout in case we never see white
     jolt_start = time.monotonic()
-    while time.monotonic() - jolt_start < 1.0:
+    while time.monotonic() - jolt_start < 0.5:
         vals = sensors.read_calibrated()
         # Check if we see line (True if any sensor is black)
         see_line = any(v > 0.5 for v in vals)
@@ -94,11 +82,12 @@ def standard_align(motors, sensors):
     motors.stop()
 
 def execute_random_fork(motors):
-    choice = random.choice(['LEFT', 'CENTER', 'RIGHT'])
+    # choice = random.choice(['LEFT', 'CENTER', 'RIGHT'])
+    choice = 'CENTER'
     print(f">>> DECISION: {choice}")
     
     TURN_SPEED = 0.4
-    TURN_TIME = 0.4 
+    TURN_TIME = 0.2 
     FORWARD_TIME = 0.2
     
     if choice == 'LEFT':
@@ -119,19 +108,73 @@ def turn_180(motors, sensors):
     # We spin until we see it again.
     
     # 1. Blind Spin (get rotation started)
-    motors.set_speeds(0.4, -0.4)
-    time.sleep(0.4) 
-    
-    # 2. Spin until Center sees black
-    timeout = 2.5
+    motors.set_speeds(0.3, -0.3)
+    time.sleep(0.5) 
+
+    # 2. Spin until we see WHITE (Clear the messy intersection/bar)
+    # This prevents the robot from stopping instantly because it saw the bar it just crossed.
+    print("   -> Waiting for clear (White)...")
+    timeout = 1.0
     start = time.monotonic()
     while time.monotonic() - start < timeout:
         vals = sensors.read_calibrated()
-        if vals[3] > 0.6 or vals[4] > 0.6:
+        # If middle sensors are basically white (< 0.5), we are clear
+        if vals[3] < 0.5 and vals[4] < 0.5:
+            break
+        # Keep spinning
+        motors.set_speeds(0.25, -0.25)
+    
+    # 3. Spin until Center sees BLACK (Acquire new line)
+    print("   -> Searching for Line (Black)...")
+    timeout = 0.5
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        vals = sensors.read_calibrated()
+        if vals[0] > 0.6 and vals[7] > 0.6:
             print("Line Acquired.")
             break
-        motors.set_speeds(0.4, -0.4)
+        motors.set_speeds(0.25, -0.25)
         
     motors.stop()
     time.sleep(0.2)
+
+    # ====================================================
+    # 4. NEW: CREEP RECOVERY (If we missed the line)
+    # ====================================================
+    vals = sensors.read_calibrated()
+    # If max sensor value is low (< 0.5), we are on white (LOST)
+    if max(vals) < 0.5:
+        print(">>> RECOVERY: Line missed. Creeping...")
+        
+        # Try 4 times: Scan -> Creep -> Check
+        for i in range(4):
+            # A. Small Wiggle (Spin) to check side-to-side
+            print(f"   -> Scan {i+1}...")
+            
+            # Scan Left
+            motors.set_speeds(-0.15, 0.15)
+            time.sleep(0.15)
+            if max(sensors.read_calibrated()) > 0.5:
+                break
+            
+            # Scan Right (past center)
+            motors.set_speeds(0.15, -0.15)
+            time.sleep(0.3)
+            if max(sensors.read_calibrated()) > 0.5:
+                break
+            
+            # Re-center
+            motors.set_speeds(-0.15, 0.15)
+            time.sleep(0.15)
+            
+            # B. Creep Forward
+            print(f"   -> Creep {i+1}...")
+            motors.set_speeds(0.10, 0.10)  # Slow Creep
+            time.sleep(0.25)
+            motors.stop()
+            
+            # Check again
+            if max(sensors.read_calibrated()) > 0.5: 
+                print("   -> Line Found!")
+                break
 

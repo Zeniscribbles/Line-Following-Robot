@@ -5,19 +5,21 @@ import digitalio
 from motor_2_channel import MotorDriver
 from reflective_array_subsystem import ReflectiveArray
 from PID import PID
+import esp32_trx as trx
+
 
 # ================= CONFIGURATION =================
 TURN_SPEED          = 0.4
-BASE_SPEED          = 0.15
-CORNER_SENSITIVITY  = 0.8
+BASE_SPEED          = 0.20
+CORNER_SENSITIVITY  = 0.7
 ALL_WHITE_THRESHOLD = 0.2
 MEMORY_THRESHOLD    = 0.5
 HARD_TURN_DURATION  = 0.3
 
 # --- EXIT CONDITIONS ---
 BAR_THRESH          = 0.60     # Matched to robot_main
-BAR_COUNT_THRESH    = 4        # Matched to robot_main
-BAR_HITS_REQUIRED   = 3        # How many times we confirm the bar
+BAR_COUNT_THRESH    = 8        # Matched to robot_main
+BAR_HITS_REQUIRED   = 2        # How many times we confirm the bar
 DEBUG_INTERVAL      = 0.2
 # =================================================
 
@@ -59,12 +61,12 @@ def trigger_hard_turn_if_needed(motors, vals, now):
     # =========================================================
 
     if vals[0] > CORNER_SENSITIVITY:
-        print(f"   >>> [T-TURN] LEFT INTERSECTION (Sens0: {vals[0]:.2f})")
+        trx.sendMSG(f"   >>> [T-TURN] LEFT INTERSECTION (Sens0: {vals[0]:.2f})")
         motors.set_speeds(-TURN_SPEED, TURN_SPEED)
         return True, now + HARD_TURN_DURATION, -1
 
     if vals[7] > CORNER_SENSITIVITY:
-        print(f"   >>> [T-TURN] RIGHT INTERSECTION (Sens7: {vals[7]:.2f})")
+        trx.sendMSG(f"   >>> [T-TURN] RIGHT INTERSECTION (Sens7: {vals[7]:.2f})")
         motors.set_speeds(TURN_SPEED, -TURN_SPEED)
         return True, now + HARD_TURN_DURATION, 1
 
@@ -96,7 +98,7 @@ def run_line_follower(motors, sensors, pid):
     # FIX 2: Re-enable the counter for robustness
     bar_hits = 0 
 
-    print(">>> T-TURN STARTED: Entering Loop...")
+    trx.sendMSG(">>> T-TURN STARTED: Entering Loop...")
     
     bar_hits = 0
 
@@ -111,7 +113,7 @@ def run_line_follower(motors, sensors, pid):
             # --- DEBUG PRINTS ---
             if now - last_debug_time > DEBUG_INTERVAL:
                 sens_str = "".join(["#" if v > 0.5 else "_" for v in vals])
-                print(f"[T-TURN] Hits:{bar_hits} | Max:{max_reflection:.2f} | {sens_str}")
+                trx.sendMSG(f"[T-TURN] Hits:{bar_hits} | Max:{max_reflection:.2f} | {sens_str}")
                 last_debug_time = now
             # --------------------
 
@@ -124,7 +126,7 @@ def run_line_follower(motors, sensors, pid):
                 if bar_hits < 0: bar_hits = 0
             
             if bar_hits >= BAR_HITS_REQUIRED:
-                print(f">>> T-TURN COMPLETE: Bar detected ({bar_hits} hits).")
+                trx.sendMSG(f">>> T-TURN COMPLETE: Bar detected ({bar_hits} hits).")
                 motors.stop()
                 return # SUCCESS: We go back to the Main Menu
 
@@ -149,9 +151,9 @@ def run_line_follower(motors, sensors, pid):
 
 # ================== PUBLIC ENTRYPOINT ==================
 def run_t_turns(motors, sensors, **kwargs):
-    kp = kwargs.get('kp', 0.40)
+    kp = kwargs.get('kp', 0.75)
     ki = kwargs.get('ki', 0.01)
-    kd = kwargs.get('kd', 0.055)
+    kd = kwargs.get('kd', 0.07)
 
     pid = PID(kp=kp, ki=ki, kd=kd)
 
