@@ -4,7 +4,6 @@ import digitalio
 import random
 
 # ================= HELPER FUNCTIONS =================
-
 def force_align_and_cross(motors, sensors, came_from):
     """
     Handles the arrival at a messy intersection based on the path taken.

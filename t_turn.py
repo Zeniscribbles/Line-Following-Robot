@@ -7,7 +7,6 @@ from reflective_array_subsystem import ReflectiveArray
 from PID import PID
 import esp32_trx as trx
 
-
 # ================= CONFIGURATION =================
 TURN_SPEED          = 0.4
 BASE_SPEED          = 0.20
@@ -22,7 +21,6 @@ BAR_COUNT_THRESH    = 8        # Matched to robot_main
 BAR_HITS_REQUIRED   = 2        # How many times we confirm the bar
 DEBUG_INTERVAL      = 0.2
 # =================================================
-
 
 # --------------- SENSOR STATE --------------------
 def read_line_state(sensors, last_valid_error):

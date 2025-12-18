@@ -63,7 +63,6 @@ LEFT_TRIM_VAL = 1.0
 RIGHT_TRIM_VAL = 0.85
 
 # 3. TRACK SEQUENCE
-
 TRACK_SEQUENCE = [
     {"name": "SERPENTINE",     "action": None,                 "gaps_allowed": False},
     {"name": "STRAIGHTAWAY",   "action": None,                 "gaps_allowed": True},
@@ -79,7 +78,7 @@ TRACK_SEQUENCE = [
 ]
 
 # -----------------------------------------------
-
+# Wifi Enabled Debugging Statements:
 trx.setDebug(
     printDebug=True, blinkDebug=True
 )  # Set printDebug=True so you see it in Mu
@@ -121,6 +120,7 @@ def run_robot():
     except Exception as e:
         trx.sendMSG(f"DEBUG: Button setup skipped: {e}")
         HAS_BUTTON = False
+
     # ==========================================================
     # CALIBRATION LOOP
     # ==========================================================
@@ -185,6 +185,7 @@ def run_robot():
         trx.sendMSG("       3. Did robot spin over the black line?")
     else:
         trx.sendMSG("DEBUG: Sensors look healthy.")
+
     # --- WAIT FOR START ---
     if HAS_BUTTON:
         trx.sendMSG(">>> Press Button to Start... <<<")
@@ -195,6 +196,7 @@ def run_robot():
     else:
         trx.sendMSG("No button. Starting in 2s...")
         time.sleep(2)
+
     # --- INITIALIZE STATE ---
     pid = PID(kp=KP, ki=KI, kd=KD)
     track_index = 0
@@ -257,13 +259,13 @@ def run_robot():
             if bar_hits >= 5:
                 trx.sendMSG(f">>> TRANSITION: Leaving {current_track['name']}")
 
-                # -------- NEW CHECK ---------
+                # -------- CHECK ---------
                 # Determine Blind Drive Time
                 # If we are just starting, only do a tiny blip.
                 if current_track["name"] == "START_LINE":
                     blind_time = START_CLEAR_TIME  # Uses the 0.1s variable
                 else:
-                    blind_time = BAR_CLEAR_TIME  # Uses the 0.6s variable
+                    blind_time = BAR_CLEAR_TIME    # Uses the 0.6s variable
                 # -----------------------------
 
                 # Update Index
@@ -272,6 +274,7 @@ def run_robot():
                     trx.sendMSG(">>> SEQUENCE COMPLETE! Stopping.")
                     motors.stop()
                     break
+
                 # Clear Bar
                 trx.sendMSG(f"   -> Clearing Bar ({blind_time}s)...")
                 motors.set_speeds(BASE_SPEED, BASE_SPEED)
@@ -304,6 +307,7 @@ def run_robot():
                 last_correction = 0.0
                 last_time = time.monotonic()
                 continue
+                
             # 6. Drive Logic
             if is_line_lost(vals):
                 if gaps_allowed:
