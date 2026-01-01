@@ -47,7 +47,7 @@ MAX_CORRECTION = 0.45
 BAR_HITS_REQUIRED = 3
 
 # --- DRIVE TIMES ---
-BAR_CLEAR_TIME = 0.6  # Standard time to clear T-Turn/Fork bars
+BAR_CLEAR_TIME = 0.2  # Standard time to clear T-Turn/Fork bars
 START_CLEAR_TIME = 0.1  # NEW: Tiny blip just to get off the Start Linef
 
 # 2. SENSOR THRESHOLDS
@@ -256,7 +256,7 @@ def run_robot():
             # ==========================================================
 
             # 5. Transition Logic
-            if bar_hits >= 5:
+            if bar_hits >= BAR_HITS_REQUIRED:
                 trx.sendMSG(f">>> TRANSITION: Leaving {current_track['name']}")
 
                 # -------- CHECK ---------
@@ -274,19 +274,29 @@ def run_robot():
                     trx.sendMSG(">>> SEQUENCE COMPLETE! Stopping.")
                     motors.stop()
                     break
+                
+                # Get New Track immediately to check what it is
+                next_track = TRACK_SEQUENCE[track_index]
+                gaps_allowed = next_track["gaps_allowed"]
 
                 # Clear Bar
-                trx.sendMSG(f"   -> Clearing Bar ({blind_time}s)...")
-                motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                if next_track["name"] == "FORK_RETURN":
+                    trx.sendMSG(">>> DEAD END: Stopping immediately.")
+                    motors.stop()
+                    time.sleep(0.1)
+                else:
+                    trx.sendMSG(f"   -> Clearing Bar ({blind_time}s)...")
+                    motors.set_speeds(BASE_SPEED, BASE_SPEED)
+                    time.sleep(blind_time)
+                    motors.stop()
 
-                time.sleep(blind_time)
+                #time.sleep(blind_time)
 
-                motors.stop()
+                #motors.stop()
                 # time.sleep(0.1)
 
                 # Get New Track
-                current_track = TRACK_SEQUENCE[track_index]
-                gaps_allowed = current_track["gaps_allowed"]
+                current_track = next_track
                 trx.sendMSG(f">>> ENTERING: {current_track['name']}")
 
                 # Execute Action
@@ -307,7 +317,7 @@ def run_robot():
                 last_correction = 0.0
                 last_time = time.monotonic()
                 continue
-                
+
             # 6. Drive Logic
             if is_line_lost(vals):
                 if gaps_allowed:
